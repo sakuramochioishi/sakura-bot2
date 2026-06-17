@@ -5,7 +5,9 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import random
 import asyncio
-import urllib.request  # リダイレクトチェッカー用に追加
+import urllib.request
+import time
+import sys
 
 # .envファイルから環境変数を読み込む
 load_dotenv()
@@ -17,7 +19,8 @@ intents = discord.Intents.all()
 # スラッシュコマンドに対応したBotクラスの定義
 class MyBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=intents)
+        # 【変更点】プレフィックスを ! から !skr_ に変更しました
+        super().__init__(command_prefix="!skr_", intents=intents)
 
     # Bot起動時にスラッシュコマンドをDiscordに同期する
     async def setup_hook(self):
@@ -31,17 +34,15 @@ class MyBot(commands.Bot):
 bot = MyBot()
 
 # ==========================================
-# 🔒 セキュリティ設定（!コマンドの権限制限）
+# 🔒 セキュリティ設定（!skr_コマンドの権限制限）
 # ==========================================
 @bot.check
 async def globally_restrict_to_owner(ctx):
-    # 今後増えるものも含め、全ての「!」コマンドを実行できるのはBotのオーナー（あなた）だけに制限します
     return await bot.is_owner(ctx.author)
 
 @bot.event
 async def on_command_error(ctx, error):
-    # オーナー以外の人が「!」コマンドを打った時は、エラーメッセージを出さずに完全にスルー（無視）します
-    if isinstance(error, commands.NotOwner):
+    if isinstance(error, (commands.NotOwner, commands.CommandNotFound)):
         return
     raise error
 
@@ -98,7 +99,7 @@ async def timer(interaction: discord.Interaction, minutes: int):
 
 
 # ==========================================
-# 4. 所属サーバー確認コマンド (!servers) - あなた専用
+# 4. 所属サーバー確認コマンド (!skr_servers) - あなた専用
 # ==========================================
 @bot.command(name="servers")
 async def list_servers(ctx):
@@ -116,37 +117,31 @@ async def list_servers(ctx):
     
     await ctx.send(embed=embed)
 
-    
+
 # ==========================================
 # 5. リダイレクト先チェッカー (/redirect [URL]) - 全員用
 # ==========================================
 @bot.tree.command(name="redirect", description="URLのリダイレクト先（最終的な移動先）をチェックします")
 async def check_redirect(interaction: discord.Interaction, url: str):
-    # URLが http から始まっているか簡易チェック
     if not url.startswith(("http://", "https://")):
         await interaction.response.send_message("❌ URLは `http://` または `https://` から始めてください。", ephemeral=True)
         return
 
-    # 処理に時間がかかる可能性があるので、先に「調べています」と応答
     await interaction.response.defer()
 
     try:
-        # リクエストを送信して最終的なURLを取得
-        req = urllib.request.Request(
-            url, 
-            headers={'User-Agent': 'Mozilla/5.0'} # ブロック対策のブラウザ偽装
-        )
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
             final_url = response.geturl()
         
-        # 元のURLと転送先が同じかどうかでメッセージを変える
         if url == final_url:
-            await interaction.followup.send(f"🔗 **転送なし（安全な直リンクです）**\n`{final_url}`")
+            await interaction.followup.send(f"🔗 **転送なし（直リンクです）**\n`{final_url}`")
         else:
             await interaction.followup.send(f"➡️ **リダイレクトを検出しました！**\n元のURL: <{url}>\n↓\n最終目的地: **`{final_url}`**")
 
     except Exception as e:
-        await interaction.followup.send(f"❌ URLの解析に失敗しました。（タイムアウト、または存在しないサイトの可能性があります）\nエラー内容: `{e}`")
+        await interaction.followup.send(f"❌ URLの解析に失敗しました。\nエラー内容: `{e}`")
+
 
 # ==========================================
 # 6. サーバー全員対象ルーレットコマンド (/roulette) - 全員用
@@ -172,8 +167,6 @@ class MemberRouletteView(discord.ui.View):
 @bot.tree.command(name="roulette", description="サーバー内の全メンバーからランダムに1人選んでメンションします")
 async def roulette(interaction: discord.Interaction):
     guild = interaction.guild
-    
-    # サーバーの全メンバーからBotを除外して、そのまま全員を候補にする
     candidates = [m for m in guild.members if not m.bot]
     mode_text = "👥 全サーバーメンバー"
 
@@ -181,11 +174,9 @@ async def roulette(interaction: discord.Interaction):
         await interaction.response.send_message("❌ 抽選対象となるメンバーが見つかりませんでした。", ephemeral=True)
         return
 
-    # 演出開始
     await interaction.response.send_message(f"🎰 **{mode_text}から選出中... ドラムロールスタート！**")
     await asyncio.sleep(2.0)
 
-    # ランダムで1人選出
     chosen_member = random.choice(candidates)
     
     embed = discord.Embed(
@@ -195,24 +186,131 @@ async def roulette(interaction: discord.Interaction):
     )
     
     view = MemberRouletteView(candidates)
-    
     await interaction.edit_original_response(content=f"🎯 {chosen_member.mention} ロックオン！", embed=embed, view=view)
+
 
 # ==========================================
 # 7. コウメ太夫構文コマンド (/koubun [言葉1] [言葉2]) - 全員用
 # ==========================================
 @bot.tree.command(name="koubun", description="ふたつの言葉からコウメ太夫のネタを生成します")
-@app_commands.describe(word1="〜と思ったら", word2="〜した")
+@app_commands.describe(word1="〜かと思ったら（例: 美容院に行ったら）", word2="〜でした（例: ゴリラの檻に入れられてました）")
 async def koubun(interaction: discord.Interaction, word1: str, word2: str):
-    # 改行を入れて、あの独特のテンポをテキストで表現します
     joke = (
         f"チャンチャカチャンチャン チャチャンチャチャンチャン♪\n\n"
-        f"**{word1}** と思ったら〜〜〜\n\n"
-        f"**{word2}** した〜〜〜\n\n"
+        f"**{word1}** かと思ったら〜〜〜\n\n"
+        f"**{word2}** でした〜〜〜\n\n"
         f"**チクショーー！！** 😭"
     )
-    
     await interaction.response.send_message(joke)
+
+
+# ==========================================
+# 8. 早押しクイズコマンド (/quiz [問題] [正解]) - 全員用
+# ==========================================
+class QuizBuzzerView(discord.ui.View):
+    def __init__(self, bot, answer: str, start_time: float):
+        super().__init__(timeout=30)
+        self.bot = bot
+        self.answer = answer.strip()
+        self.start_time = start_time
+        self.answered = False
+
+    @discord.ui.button(label="押しボタン 🔴", style=discord.ButtonStyle.danger)
+    async def press_buzzer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.answered:
+            await interaction.response.send_message("遅かった！すでに他の人がボタンを押しています。", ephemeral=True)
+            return
+
+        self.answered = True
+        self.stop()
+        button.disabled = True
+
+        elapsed_time = time.time() - self.start_time
+        await interaction.response.edit_message(view=self)
+
+        await interaction.channel.send(
+            f"📢 **早押し成功！**\n"
+            f"タイム: `{elapsed_time:.2f}秒` ⏱️\n"
+            f"解答権： {interaction.user.mention} さん！\n"
+            f"**15秒以内**にチャットに答えを入力してください！"
+        )
+
+        def check_answer(msg):
+            return msg.author == interaction.user and msg.channel == interaction.channel
+
+        try:
+            user_msg = await self.bot.wait_for('message', check=check_answer, timeout=15.0)
+            if user_msg.content.strip().lower() == self.answer.lower():
+                await user_msg.reply(f"🎉 **正解！！** おめでとうございます！\n答えは「**{self.answer}**」でした！")
+            else:
+                await user_msg.reply(f"❌ **残念、不正解！**\n正解は「**{self.answer}**」でした！")
+
+        except asyncio.TimeoutError:
+            await interaction.channel.send(f"⏰ タイムアップ！時間内に解答がありませんでした。\n正解は「**{self.answer}**」でした！")
+
+@bot.tree.command(name="quiz", description="早押しクイズを出題します（解答権は最初にボタンを押した1人のみ）")
+@app_commands.describe(question="出題する問題文", answer="クイズの正解（回答者がチャットに入力するもの）")
+async def quiz(interaction: discord.Interaction, question: str, answer: str):
+    embed = discord.Embed(
+        title="❓ 早押しクイズ出題！",
+        description=f"【問題】\n**{question}**\n\n分かった人は下のボタンを素早くプッシュ！",
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text="※解答権は最初にボタンを押した1人のみです。ボタンを押した後にチャットで答えてね！")
+
+    start_time = time.time()
+    view = QuizBuzzerView(bot, answer, start_time)
+    await interaction.response.send_message(embed=embed, view=view)
+
+
+# ==========================================
+# ⚙️ 9. 管理者専用コマンド群 (接頭辞: !skr_)
+# ==========================================
+
+# ① Botにお喋りさせるコマンド (!skr_say)
+@bot.command(name="say")
+async def bot_say(ctx, channel: discord.TextChannel, *, message: str):
+    await ctx.message.delete()
+    await channel.send(message)
+
+# ② Botのステータスを変更するコマンド (!skr_status)
+@bot.command(name="status")
+async def change_status(ctx, *, text: str):
+    await bot.change_presence(activity=discord.Game(name=text))
+    await ctx.send(f"🤖 Botのステータスを「**{text} をプレイ中**」に変更しました！")
+
+# ③ 回線速度（Ping値）を確認するコマンド (!skr_ping)
+@bot.command(name="ping")
+async def ping_check(ctx):
+    raw_ping = bot.latency * 1000
+    
+    start_time = time.time()
+    message = await ctx.send("⚡ Ping測定中...")
+    end_time = time.time()
+    
+    msg_ping = (end_time - start_time) * 1000
+    
+    embed = discord.Embed(title="📶 Bot回線状態（レイテンシ）", color=discord.Color.green())
+    embed.add_field(name="WebSocket Ping (APIとの通信)", value=f"`{raw_ping:.2f} ms`", inline=False)
+    embed.add_field(name="Message Ping (メッセージ送信速度)", value=f"`{msg_ping:.2f} ms`", inline=False)
+    
+    if raw_ping < 50:
+        status_text = "🟢 非常に快適（爆速です）"
+    elif raw_ping < 150:
+        status_text = "🟡 普通（通常利用に問題ありません）"
+    else:
+        status_text = "🔴 遅延気味（Discord側かサーバーが重い可能性があります）"
+        
+    embed.set_footer(text=f"稼働状況: {status_text}")
+    await message.edit(content=None, embed=embed)
+
+# ④ Botを強制終了（再起動）させるコマンド (!skr_restart)
+@bot.command(name="restart")
+async def restart_bot(ctx):
+    await ctx.send("🔄 **Botを終了します。再起動中...**")
+    print("管理者コマンドにより、プログラムを終了します。")
+    await bot.close()
+    sys.exit(0)
 
 
 # ==========================================
