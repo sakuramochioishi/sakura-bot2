@@ -19,7 +19,6 @@ intents = discord.Intents.all()
 # スラッシュコマンドに対応したBotクラスの定義
 class MyBot(commands.Bot):
     def __init__(self):
-        # 【変更点】プレフィックスを ! から !skr_ に変更しました
         super().__init__(command_prefix="!skr_", intents=intents)
 
     # Bot起動時にスラッシュコマンドをDiscordに同期する
@@ -65,27 +64,7 @@ async def omikuji(interaction: discord.Interaction):
 
 
 # ==========================================
-# 2. メッセージ一括削除コマンド (/clear [件数]) - 管理者用
-# ==========================================
-@bot.tree.command(name="clear", description="指定した件数のメッセージを一括削除します")
-@app_commands.checks.has_permissions(manage_messages=True)
-async def clear(interaction: discord.Interaction, amount: int):
-    if amount < 1:
-        await interaction.response.send_message("1以上の数値を指定してください。", ephemeral=True)
-        return
-
-    await interaction.response.send_message(f"{amount}件のメッセージを削除しています...", ephemeral=True)
-    deleted = await interaction.channel.purge(limit=amount)
-    await interaction.followup.send(f"正常に {len(deleted)} 件のメッセージを削除しました！", ephemeral=True)
-
-@clear.error
-async def clear_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.errors.MissingPermissions):
-        await interaction.response.send_message("このコマンドを実行する権限（メッセージの管理）がありません。", ephemeral=True)
-
-
-# ==========================================
-# 3. タイマーコマンド (/timer [分]) - 全員用
+# 2. タイマーコマンド (/timer [分]) - 全員用
 # ==========================================
 @bot.tree.command(name="timer", description="指定した分数後にメンションで通知します")
 async def timer(interaction: discord.Interaction, minutes: int):
@@ -99,27 +78,7 @@ async def timer(interaction: discord.Interaction, minutes: int):
 
 
 # ==========================================
-# 4. 所属サーバー確認コマンド (!skr_servers) - あなた専用
-# ==========================================
-@bot.command(name="servers")
-async def list_servers(ctx):
-    guild_count = len(bot.guilds)
-    
-    server_list = ""
-    for guild in bot.guilds:
-        server_list += f"• **{guild.name}** (メンバー数: {guild.member_count}人, ID: `{guild.id}`)\n"
-    
-    embed = discord.Embed(
-        title="🤖 Bot所属サーバー一覧",
-        description=f"現在 **{guild_count}** 個のサーバーに参加しています。\n\n{server_list}",
-        color=discord.Color.blue()
-    )
-    
-    await ctx.send(embed=embed)
-
-
-# ==========================================
-# 5. リダイレクト先チェッカー (/redirect [URL]) - 全員用
+# 3. リダイレクト先チェッカー (/redirect [URL]) - 全員用
 # ==========================================
 @bot.tree.command(name="redirect", description="URLのリダイレクト先（最終的な移動先）をチェックします")
 async def check_redirect(interaction: discord.Interaction, url: str):
@@ -144,7 +103,7 @@ async def check_redirect(interaction: discord.Interaction, url: str):
 
 
 # ==========================================
-# 6. サーバー全員対象ルーレットコマンド (/roulette) - 全員用
+# 4. サーバー全員対象ルーレットコマンド (/roulette) - 全員用
 # ==========================================
 class MemberRouletteView(discord.ui.View):
     def __init__(self, target_members):
@@ -190,10 +149,10 @@ async def roulette(interaction: discord.Interaction):
 
 
 # ==========================================
-# 7. コウメ太夫構文コマンド (/koubun [言葉1] [言葉2]) - 全員用
+# 5. コウメ太夫構文コマンド (/koubun [言葉1] [言葉2]) - 全員用
 # ==========================================
 @bot.tree.command(name="koubun", description="ふたつの言葉からコウメ太夫のネタを生成します")
-@app_commands.describe(word1="〜かと思ったら（例: 美容院に行ったら）", word2="〜でした（例: ゴリラの檻に入れられてました）")
+@app_commands.describe(word1="〜かと思ったら", word2="〜でした")
 async def koubun(interaction: discord.Interaction, word1: str, word2: str):
     joke = (
         f"チャンチャカチャンチャン チャチャンチャチャンチャン♪\n\n"
@@ -205,34 +164,44 @@ async def koubun(interaction: discord.Interaction, word1: str, word2: str):
 
 
 # ==========================================
-# 8. 早押しクイズコマンド (/quiz [問題] [正解]) - 全員用
+# 6. 進化した早押しクイズコマンド (/quiz [問題] [正解]) - 全員用
 # ==========================================
 class QuizBuzzerView(discord.ui.View):
-    def __init__(self, bot, answer: str, start_time: float):
-        super().__init__(timeout=30)
+    def __init__(self, bot, answer: str, start_time: float, embed: discord.Embed):
+        # 【変更点】10分（600秒）誰も押さなければタイムアウトして自動終了
+        super().__init__(timeout=600)
         self.bot = bot
         self.answer = answer.strip()
         self.start_time = start_time
-        self.answered = False
+        self.base_embed = embed
+        
+        self.is_processing = False
+        self.wrong_users = set()
+        self.quiz_message = None
 
     @discord.ui.button(label="押しボタン 🔴", style=discord.ButtonStyle.danger)
     async def press_buzzer(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.answered:
+        if self.is_processing:
             await interaction.response.send_message("遅かった！すでに他の人がボタンを押しています。", ephemeral=True)
             return
 
-        self.answered = True
-        self.stop()
-        button.disabled = True
+        if interaction.user.id in self.wrong_users:
+            await interaction.response.send_message("❌ あなたはすでに解答権を失っています（お手付き）。他の人の解答を待ちましょう！", ephemeral=True)
+            return
 
-        elapsed_time = time.time() - self.start_time
+        self.is_processing = True
+        
+        button.disabled = True
+        button.style = discord.ButtonStyle.secondary
+        button.label = "考え中... 💬"
         await interaction.response.edit_message(view=self)
 
-        await interaction.channel.send(
-            f"📢 **早押し成功！**\n"
-            f"タイム: `{elapsed_time:.2f}秒` ⏱️\n"
+        elapsed_time = time.time() - self.start_time
+
+        announce_msg = await interaction.channel.send(
+            f"📢 **早押し成功！** （タイム: `{elapsed_time:.2f}秒` ⏱️）\n"
             f"解答権： {interaction.user.mention} さん！\n"
-            f"**15秒以内**にチャットに答えを入力してください！"
+            f"🚨 **15秒以内**にチャットに答えを入力してください！"
         )
 
         def check_answer(msg):
@@ -240,54 +209,110 @@ class QuizBuzzerView(discord.ui.View):
 
         try:
             user_msg = await self.bot.wait_for('message', check=check_answer, timeout=15.0)
+            
             if user_msg.content.strip().lower() == self.answer.lower():
                 await user_msg.reply(f"🎉 **正解！！** おめでとうございます！\n答えは「**{self.answer}**」でした！")
+                self.stop()
+                
+                button.label = "正解が出ました 🎉"
+                button.style = discord.ButtonStyle.success
+                await self.quiz_message.edit(view=self)
+                return
             else:
-                await user_msg.reply(f"❌ **残念、不正解！**\n正解は「**{self.answer}**」でした！")
+                await user_msg.reply(f"❌ **不正解！** {interaction.user.mention} さんは解答権を失いました。")
 
         except asyncio.TimeoutError:
-            await interaction.channel.send(f"⏰ タイムアップ！時間内に解答がありませんでした。\n正解は「**{self.answer}**」でした！")
+            await interaction.channel.send(f"⏰ タイムアップ！ {interaction.user.mention} さんは時間切れで解答権を失いました。")
 
-@bot.tree.command(name="quiz", description="早押しクイズを出題します（解答権は最初にボタンを押した1人のみ）")
-@app_commands.describe(question="出題する問題文", answer="クイズの正解（回答者がチャットに入力するもの）")
+        self.wrong_users.add(interaction.user.id)
+        self.is_processing = False
+        
+        button.disabled = False
+        button.style = discord.ButtonStyle.danger
+        button.label = "押しボタン 🔴"
+        
+        lost_mentions = [f"<@{uid}>" for uid in self.wrong_users]
+        self.base_embed.set_footer(text=f"※解答権喪失: {', '.join(lost_mentions)}\nまだの人はボタンを押せます！")
+        
+        await self.quiz_message.edit(embed=self.base_embed, view=self)
+        await announce_msg.delete()
+
+    # 10分間誰もボタンを押さずにタイムアウトした場合の処理
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+            item.label = "時間切れ ⏰"
+            item.style = discord.ButtonStyle.secondary
+            
+        if self.quiz_message:
+            await self.quiz_message.edit(view=self)
+            # 【変更点】テキストを「10分間」に修正しました
+            await self.quiz_message.channel.send(f"⏰ **10分間誰の解答もなかったため、クイズを終了します。**\n正解は「**{self.answer}**」でした！")
+
+@bot.tree.command(name="quiz", description="早押しクイズを出題します（間違えたら他の人に回答権が回ります）")
+@app_commands.describe(question="出題する問題文", answer="クイズの正解")
 async def quiz(interaction: discord.Interaction, question: str, answer: str):
     embed = discord.Embed(
         title="❓ 早押しクイズ出題！",
         description=f"【問題】\n**{question}**\n\n分かった人は下のボタンを素早くプッシュ！",
         color=discord.Color.gold()
     )
-    embed.set_footer(text="※解答権は最初にボタンを押した1人のみです。ボタンを押した後にチャットで答えてね！")
+    embed.set_footer(text="🚨 間間違えたり15秒答えないとお手付きになり、他の人が押せるようになります。")
 
     start_time = time.time()
-    view = QuizBuzzerView(bot, answer, start_time)
+    view = QuizBuzzerView(bot, answer, start_time, embed)
+    
     await interaction.response.send_message(embed=embed, view=view)
+    view.quiz_message = await interaction.original_response()
 
 
 # ==========================================
-# ⚙️ 9. 管理者専用コマンド群 (接頭辞: !skr_)
+# ⚙️ 7. 管理者専用コマンド群 (接頭辞: !skr_)
 # ==========================================
 
-# ① Botにお喋りさせるコマンド (!skr_say)
+# ① メッセージ一括削除コマンド
+@bot.command(name="clear")
+async def msg_clear(ctx, amount: int):
+    if amount < 1:
+        await ctx.send("1以上の数値を指定してください。", delete_after=5)
+        return
+    deleted = await ctx.channel.purge(limit=amount + 1)
+    await ctx.send(f"🧹 正常に {len(deleted) - 1} 件のメッセージを削除しました！", delete_after=5)
+
+# ② 所属サーバー確認コマンド
+@bot.command(name="servers")
+async def list_servers(ctx):
+    guild_count = len(bot.guilds)
+    server_list = ""
+    for guild in bot.guilds:
+        server_list += f"• **{guild.name}** (メンバー数: {guild.member_count}人, ID: `{guild.id}`)\n"
+    
+    embed = discord.Embed(
+        title="🤖 Bot所属サーバー一覧",
+        description=f"現在 **{guild_count}** 個のサーバーに参加しています。\n\n{server_list}",
+        color=discord.Color.blue()
+    )
+    await ctx.send(embed=embed)
+
+# ③ Botにお喋りさせるコマンド
 @bot.command(name="say")
 async def bot_say(ctx, channel: discord.TextChannel, *, message: str):
     await ctx.message.delete()
     await channel.send(message)
 
-# ② Botのステータスを変更するコマンド (!skr_status)
+# ④ Botのステータスを変更するコマンド
 @bot.command(name="status")
 async def change_status(ctx, *, text: str):
     await bot.change_presence(activity=discord.Game(name=text))
     await ctx.send(f"🤖 Botのステータスを「**{text} をプレイ中**」に変更しました！")
 
-# ③ 回線速度（Ping値）を確認するコマンド (!skr_ping)
+# ⑤ 回線速度（Ping値）を確認するコマンド
 @bot.command(name="ping")
 async def ping_check(ctx):
     raw_ping = bot.latency * 1000
-    
     start_time = time.time()
     message = await ctx.send("⚡ Ping測定中...")
     end_time = time.time()
-    
     msg_ping = (end_time - start_time) * 1000
     
     embed = discord.Embed(title="📶 Bot回線状態（レイテンシ）", color=discord.Color.green())
@@ -304,10 +329,10 @@ async def ping_check(ctx):
     embed.set_footer(text=f"稼働状況: {status_text}")
     await message.edit(content=None, embed=embed)
 
-# ④ Botを強制終了（再起動）させるコマンド (!skr_restart)
+# ⑥ Botを強制終了（再起動）させるコマンド
 @bot.command(name="restart")
 async def restart_bot(ctx):
-    await ctx.send("🔄 **Botを終了します。再起動中...**")
+    await ctx.send(" **再起動処理を実行中**")
     print("管理者コマンドにより、プログラムを終了します。")
     await bot.close()
     sys.exit(0)
