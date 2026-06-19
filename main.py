@@ -68,27 +68,32 @@ async def help_command(interaction: discord.Interaction):
         color=discord.Color.blurple()
     )
 
-    # 1. 一般ユーザー用（スラッシュコマンド）
-    general_cmds = (
-        "🧠 **/quiz [問題] [正解]**\n"
-        "└ 本格的な早押しクイズを出題（10分スルーで自動終了・お手付き時は他者に権利移行）。\n\n"
-        "🎯 **/roulette**\n"
-        "└ サーバー内の全メンバー（Bot除く）からランダムに1人を選出。\n\n"
-        "🔮 **/omikuji**\n"
-        "└ 今日の運勢を占います。\n\n"
+    # 1. 一般ユーザー用コマンド（全員に表示）
+    user_cmds = (
+        "🎲 **/roulette [選択肢1, 選択肢2, ...]**\n"
+        "└ カンマ区切りで入力された選択肢から、Botがランダムで1つを決定。\n\n"
+        "📝 **/quiz**\n"
+        "└ クイズを出題します（ボタンで回答、制限時間付き）。\n\n"
         "⏰ **/timer [分]**\n"
-        "└ 指定した時間（分単位）が経過したらメンションでお知らせ。\n\n"
-        "🔗 **/redirect [URL]**\n"
-        "└ 入力されたURLの最終的なリダイレクト先（移動先）を安全に確認。\n\n"
-        "🏮 **/koubun [言葉1] [言葉2]**\n"
-        "└ コウメ太夫風のネタ文章を生成。"
+        "└ 指定した分数が経過した後にメンションで通知。\n\n"
+        "🔍 **/userinfo [メンション]**\n"
+        "└ 指定したメンバー（または自分）のアカウント詳細情報を確認。"
     )
-    embed.add_field(name="👥 全員が使えるコマンド", value=general_cmds, inline=False)
+    embed.add_field(name="👥 利用可能なコマンド", value=user_cmds, inline=False)
 
+    # 2. 管理者限定表示（コマンドを実行した人が管理者権限を持っている場合のみ追加）
+    if interaction.permissions.administrator:
+        admin_cmds = (
+            "🔘 **/role_panel [タイトル] [説明] [役職1] [ラベル1]...**\n"
+            "└ ボタンを押すだけで役職を自動で付け外しできるパネルを設置します。"
+        )
+        embed.add_field(name="🔒 管理者専用コマンド", value=admin_cmds, inline=False)
 
-    embed.set_footer(text="sakura-bot2 • 快適なサーバーライフを！")
-    
-    # 全員が見える形で返信
+    # フッター設定
+    bot_avatar = bot.user.display_avatar.url if bot.user.avatar else None
+    embed.set_footer(text="SAKURA-BOT System", icon_url=bot_avatar)
+
+    # 全員が見えるように送信
     await interaction.response.send_message(embed=embed)
 
 
@@ -443,6 +448,43 @@ async def restart_bot(ctx):
     print("管理者コマンドにより、プログラムを終了します。")
     await bot.close()
     sys.exit(0)
+
+# ==========================================
+# 👑 オーナー専用 テキストヘルプコマンド
+# ==========================================
+
+@bot.command(name="skr_help")
+async def skr_help_command(ctx):
+    # コマンドを実行した人がBotの所有者（オーナー）かどうかをチェック
+    if not await bot.is_owner(ctx.author):
+        # オーナー以外が打った場合は、コマンドの存在自体を隠すために何も反応しない
+        return
+
+    # 所有者専用の隠しコマンド一覧を埋め込み（Embed）で作成
+    embed = discord.Embed(
+        title="👑 sakura-bot2 オーナー限定コマンド一覧 👑",
+        description="Botの所有者（あなた）のみが実行できる、ダイレクトなテキスト管理コマンドです。",
+        color=discord.Color.red() # 警告・重要を表す赤色
+    )
+
+    secret_cmds = (
+        "🧹 **!skr_clear [件数]**\n"
+        "└ 指定した件数のチャットメッセージを一括削除（自動消滅通知付き）。\n\n"
+        "📢 **!skr_say [#チャンネル] [メッセージ]**\n"
+        "└ 指定したチャンネルにBotとしてメッセージを代弁投稿。\n\n"
+        "🎭 **!skr_status [テキスト]**\n"
+        "└ Botのステータス（〜をプレイ中）を動的に変更。\n\n"
+        "📶 **!skr_ping**\n"
+        "└ Botの通信速度（API遅延・メッセージ送信速度）を確認。\n\n"
+        "🌐 **!skr_servers**\n"
+        "└ Botが現在参加しているサーバーの一覧とIDを確認。\n\n"
+        "🔄 **!skr_restart**\n"
+        "└ Botを安全に終了（環境により自動再起動）。"
+    )
+    embed.add_field(name="🛠️ システム管理コマンド", value=secret_cmds, inline=False)
+    
+    # 所有者へ確認用に送信
+    await ctx.send(embed=embed)
 
 # ==========================================
 # 🔒 セキュリティ設定 & 📋 監査ログ機能
