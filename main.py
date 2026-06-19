@@ -308,7 +308,6 @@ async def quiz(interaction: discord.Interaction, question: str, answer: str):
 # ① ボタンを押した時の処理を担当するクラス
 class RoleButton(discord.ui.Button):
     def __init__(self, role_id: int, label: str, style: discord.ButtonStyle):
-        # custom_idをロールごとに固有にすることで、Bot再起動後もボタンが動くようになります
         super().__init__(label=label, style=style, custom_id=f"role_{role_id}")
         self.role_id = role_id
 
@@ -320,13 +319,10 @@ class RoleButton(discord.ui.Button):
             await interaction.response.send_message("❌ 設定されたロールが見つかりません。", ephemeral=True)
             return
 
-        # メンバーが既にロールを持っているか確認
         if role in interaction.user.roles:
-            # 持っていれば外す
             await interaction.user.remove_roles(role)
             await interaction.response.send_message(f"✅ ロール【**{role.name}**】を外しました！", ephemeral=True)
         else:
-            # 持っていなければ付与
             await interaction.user.add_roles(role)
             await interaction.response.send_message(f"✅ ロール【**{role.name}**】を付与しました！", ephemeral=True)
 
@@ -334,7 +330,7 @@ class RoleButton(discord.ui.Button):
 # ② ボタンを並べて保持するためのViewクラス
 class RolePanelView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None) # パネルはずっと配置しておくためタイムアウトは無し
+        super().__init__(timeout=None)
 
 
 # ③ 管理者だけが実行できるスラッシュコマンド本体
@@ -342,20 +338,20 @@ class RolePanelView(discord.ui.View):
 @app_commands.describe(
     title="パネルのタイトル（例: ゲーム選択）", 
     description="説明文（例: 下のボタンを押すと役職がつきます）",
-    role1_id="ボタン1のロールID", role1_label="ボタン1の文字",
-    role2_id="ボタン2のロールID（任意）", role2_label="ボタン2の文字（任意）"
+    role1="ボタン1で付与する役職（選んでください）", role1_label="ボタン1の文字",
+    role2="ボタン2で付与する役職（任意）", role2_label="ボタン2の文字（任意）"
 )
-@app_commands.default_permissions(administrator=True) # 一般ユーザーの画面にはコマンド自体を表示させない
+@app_commands.default_permissions(administrator=True)
 async def create_role_panel(
     interaction: discord.Interaction, 
     title: str, 
     description: str, 
-    role1_id: str, 
+    role1: discord.Role,       # ★変更点: 型を str から discord.Role に変更
     role1_label: str, 
-    role2_id: str = None, 
+    role2: discord.Role = None, # ★変更点: 型を str から discord.Role に変更
     role2_label: str = None
 ):
-    # 実行したユーザーがサーバーの管理者権限（Administrator）を持っているかチェック
+    # 実行したユーザーがサーバーの管理者権限を持っているかチェック
     if not interaction.permissions.administrator:
         await interaction.response.send_message("❌ このコマンドを実行する権限（管理者権限）がありません。", ephemeral=True)
         return
@@ -364,17 +360,12 @@ async def create_role_panel(
     embed = discord.Embed(title=title, description=description, color=discord.Color.green())
     view = RolePanelView()
 
-    try:
-        # ボタン1の追加（必須入力）
-        view.add_item(RoleButton(role_id=int(role1_id), label=role1_label, style=discord.ButtonStyle.primary))
-        
-        # ボタン2の追加（入力されていれば追加する）
-        if role2_id and role2_label:
-            view.add_item(RoleButton(role_id=int(role2_id), label=role2_label, style=discord.ButtonStyle.success))
-            
-    except ValueError:
-        await interaction.response.send_message("❌ ロールIDは正しい「数字（ID）」を入力してください。", ephemeral=True)
-        return
+    # ★変更点: role1.id で直接数字のIDが取得できるようになりました（ValueErrorのtry-exceptも不要に！）
+    view.add_item(RoleButton(role_id=role1.id, label=role1_label, style=discord.ButtonStyle.primary))
+    
+    # ボタン2が指定されていれば追加
+    if role2 and role2_label:
+        view.add_item(RoleButton(role_id=role2.id, label=role2_label, style=discord.ButtonStyle.success))
 
     # コマンドを打った本人にだけ見える完了メッセージ
     await interaction.response.send_message("📢 ロールパネルを作成しました！", ephemeral=True)
@@ -551,8 +542,8 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
     log_msg = None
     user = entry.user
 
-    # タイムアウト（付与・解除）
-    if entry.action == discord.AuditLogAction.member_update:
+    # 1. タイムアウト（付与・解除）の検知 (メンバー更新イベント)
+    if entry.action.value == 24:  # AuditLogAction.member_update の数値
         if hasattr(entry.after, 'communication_disabled_until'):
             target = entry.target
             before_timeout = entry.before.communication_disabled_until
@@ -563,25 +554,25 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
             elif not after_timeout and before_timeout:
                 log_msg = f"🔊 [タイムアウト解除]\n実行者: {user}\n対象者: {target}"
 
-    # ★修正：ban_add ➡️ member_ban_add に変更
-    elif entry.action == discord.AuditLogAction.member_ban_add:
+    # 2. BAN（追放）の検知
+    elif entry.action.value == 22:  # BAN追加の数値
         log_msg = f"🔨 [BAN 執行]\n実行者: {user}\n対象者: {entry.target}\n理由: {entry.reason}"
 
-    # ★修正：ban_remove ➡️ member_ban_remove に変更
-    elif entry.action == discord.AuditLogAction.member_ban_remove:
+    # 3. BAN解除の検知
+    elif entry.action.value == 23:  # BAN解除の数値
         log_msg = f"🔓 [BAN 解除]\n実行者: {user}\n対象者: {entry.target}"
 
-    # ★修正：kick ➡️ member_kick に変更
-    elif entry.action == discord.AuditLogAction.member_kick:
+    # 4. キック（強制退出）の検知
+    elif entry.action.value == 20:  # キックの数値
         log_msg = f"👢 [キック 執行]\n実行者: {user}\n対象者: {entry.target}\n理由: {entry.reason}"
 
-    # 招待リンク作成
-    elif entry.action == discord.AuditLogAction.invite_create:
+    # 5. 招待リンク作成の検知
+    elif entry.action.value == 40:  # 招待作成の数値
         invite_code = getattr(entry.target, 'code', '不明')
         log_msg = f"✉️ [招待作成]\n作成者: {user}\nコード: discord.gg/{invite_code}"
 
-    # 招待リンク削除
-    elif entry.action == discord.AuditLogAction.invite_delete:
+    # 6. 招待リンク削除の検知
+    elif entry.action.value == 41:  # 招待削除の数値
         invite_code = getattr(entry.target, 'code', '不明')
         log_msg = f"🗑️ [招待削除]\n削除者: {user}\nコード: discord.gg/{invite_code}"
 
