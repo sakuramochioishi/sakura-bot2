@@ -657,6 +657,70 @@ async def on_ready():
     if not check_youtube_update.is_running():
         check_youtube_update.start()
 
+# 🐦 X（旧Twitter）通知の設定
+# ※あらかじめ外部サービス等で作成した「XアカウントのRSSフィードURL」をここに貼り付けます
+X_RSS_URL = "https://rss.app/feeds/o0UUr09aLtvjb39n.xml" 
+X_NOTIFY_CHANNEL_ID = 1517444749743751169 # 通知を飛ばしたい管理鯖のチャンネルID
+
+# 重複通知を防ぐために、最後に検知したポストのURL（またはID）を記憶する変数
+last_tweet_url = None
+
+# 15分ごとにXをチェックするタスク
+@tasks.loop(seconds=900)
+async def check_x_update():
+    global last_tweet_url
+    
+    await bot.wait_until_ready()
+    
+    channel = bot.get_channel(X_NOTIFY_CHANNEL_ID)
+    if not channel:
+        return
+
+    try:
+        req = urllib.request.Request(X_RSS_URL, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            xml_data = response.read()
+            
+        root = ET.fromstring(xml_data)
+        
+        # RSSフィード内の最新の投稿（item）を取得
+        item = root.find('.//item')
+        if item is None:
+            return
+            
+        tweet_title = item.find('title').text
+        tweet_url = item.find('link').text
+        
+        # 初回起動時は記憶するだけで通知しない（過去のポストが一気に流れるのを防ぐ）
+        if last_tweet_url == None:
+            last_tweet_url = tweet_url
+            print(f"🐦 X初期化: 現在の最新ポストは「{tweet_title[:15]}...」です。")
+            return
+            
+        # 記憶しているURLと違っていれば「新着ポスト」と判定！
+        if tweet_url != last_tweet_url:
+            last_tweet_url = tweet_url
+            
+            # Discordに新着ポストを通知
+            await channel.send(
+                f"📢 **X（旧Twitter）新着ポスト通知** 📢\n"
+                f"アカウントが新しくポストしました！\n\n"
+                f"📝 **内容:**\n{tweet_title}\n\n"
+                f"🔗 **リンク:** {tweet_url}"
+            )
+            print(f"🐦 新着ポストを通知しました: {tweet_title[:15]}...")
+            
+    except Exception as e:
+        print(f"⚠️ Xチェック中にエラーが発生しました: {e}")
+
+# Bot起動完了イベント（on_ready）の最後に、このタスクをスタートさせるコードを組み込みます
+# ※既存の「on_ready」関数内の一番最後に以下をさらに追記してください
+@bot.event
+async def on_ready():
+    # (既存のYouTubeタスク起動コードなどの下に追記)
+    if not check_x_update.is_running():
+        check_x_update.start()
+
 # ==========================================
 # Botの起動
 # ==========================================
