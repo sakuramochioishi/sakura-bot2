@@ -33,7 +33,7 @@ class MyBot(commands.Bot):
 bot = MyBot()
 
 # 📋 監査ログを送信するチャンネルのID（お使いのチャンネルIDに書き換えてください）
-LOG_CHANNEL_ID = 1516640360594538549
+LOG_CHANNEL_ID = 1517390946667335790
 
 # ==========================================
 # 🔒 セキュリティ設定（!skr_コマンドの権限制限）
@@ -417,6 +417,96 @@ async def send_audit_log(message_text: str):
         # メンションが無闇に飛ばないようにプレーンテキストで送信
         await channel.send(f"```{message_text}```")
 
+# ==========================================
+# 📋 サーバーアクティビティ＆モデレーション監査ログ
+# ==========================================
+
+# ① メッセージが編集されたとき
+@bot.event
+async def on_message_edit(before: discord.Message, after: discord.Message):
+    if before.author.bot or before.content == after.content:
+        return
+    log_msg = (
+        f"📝 [メッセージ編集]\n"
+        f"ユーザー: {before.author} (ID: {before.author.id})\n"
+        f"チャンネル: {before.channel.mention}\n"
+        f"変更前: {before.content}\n"
+        f"変更後: {after.content}"
+    )
+    print(log_msg)
+    await send_audit_log(log_msg)
+
+# ② メッセージが削除されたとき
+@bot.event
+async def on_message_delete(message: discord.Message):
+    if message.author.bot:
+        return
+    log_msg = (
+        f"🗑️ [メッセージ削除]\n"
+        f"ユーザー: {message.author} (ID: {message.author.id})\n"
+        f"チャンネル: {message.channel.mention}\n"
+        f"内容: {message.content if message.content else '（画像または埋め込み）'}"
+    )
+    print(log_msg)
+    await send_audit_log(log_msg)
+
+# ③ 新しいメンバーがサーバーに参加したとき
+@bot.event
+async def on_member_join(member: discord.Member):
+    log_msg = f"📥 [サーバー参加] {member} (ID: {member.id}) がサーバーに参加しました。"
+    print(log_msg)
+    await send_audit_log(log_msg)
+
+# ④ メンバーがサーバーから退出したとき
+@bot.event
+async def on_member_remove(member: discord.Member):
+    log_msg = f"📤 [サーバー退出] {member} (ID: {member.id}) がサーバーから離脱しました。"
+    print(log_msg)
+    await send_audit_log(log_msg)
+
+# ⑤ 手動での管理操作（タイムアウト・BAN・キック・招待リンク操作）の検知
+@bot.event
+async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
+    log_msg = None
+    user = entry.user
+
+    # タイムアウト（付与・解除）
+    if entry.action == discord.AuditLogAction.member_update:
+        if hasattr(entry.after, 'communication_disabled_until'):
+            target = entry.target
+            before_timeout = entry.before.communication_disabled_until
+            after_timeout = entry.after.communication_disabled_until
+
+            if after_timeout and not before_timeout:
+                log_msg = f"🔇 [タイムアウト付与]\n実行者: {user}\n対象者: {target}\n理由: {entry.reason}"
+            elif not after_timeout and before_timeout:
+                log_msg = f"🔊 [タイムアウト解除]\n実行者: {user}\n対象者: {target}"
+
+    # BAN（追放）
+    elif entry.action == discord.AuditLogAction.ban_add:
+        log_msg = f"🔨 [BAN 執行]\n実行者: {user}\n対象者: {entry.target}\n理由: {entry.reason}"
+
+    # BAN解除
+    elif entry.action == discord.AuditLogAction.ban_remove:
+        log_msg = f"🔓 [BAN 解除]\n実行者: {user}\n対象者: {entry.target}"
+
+    # キック（強制退出）
+    elif entry.action == discord.AuditLogAction.kick:
+        log_msg = f"👢 [キック 執行]\n実行者: {user}\n対象者: {entry.target}\n理由: {entry.reason}"
+
+    # 招待リンク作成
+    elif entry.action == discord.AuditLogAction.invite_create:
+        invite_code = getattr(entry.target, 'code', '不明')
+        log_msg = f"✉️ [招待作成]\n作成者: {user}\nコード: discord.gg/{invite_code}"
+
+    # 招待リンク削除
+    elif entry.action == discord.AuditLogAction.invite_delete:
+        invite_code = getattr(entry.target, 'code', '不明')
+        log_msg = f"🗑️ [招待削除]\n削除者: {user}\nコード: discord.gg/{invite_code}"
+
+    if log_msg:
+        print(log_msg)
+        await send_audit_log(log_msg)
 
 # ==========================================
 # Botの起動
