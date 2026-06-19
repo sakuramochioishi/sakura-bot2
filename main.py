@@ -8,6 +8,7 @@ import asyncio
 import urllib.request
 import time
 import sys
+import datetime  
 
 # .envファイルから環境変数を読み込む
 load_dotenv()
@@ -300,6 +301,86 @@ async def quiz(interaction: discord.Interaction, question: str, answer: str):
     await interaction.response.send_message(embed=embed, view=view)
     view.quiz_message = await interaction.original_response()
 
+# ==========================================
+# 🔘 リアクションロール（ボタン付パネル）機能
+# ==========================================
+
+# ① ボタンを押した時の処理を担当するクラス
+class RoleButton(discord.ui.Button):
+    def __init__(self, role_id: int, label: str, style: discord.ButtonStyle):
+        # custom_idをロールごとに固有にすることで、Bot再起動後もボタンが動くようになります
+        super().__init__(label=label, style=style, custom_id=f"role_{role_id}")
+        self.role_id = role_id
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        role = guild.get_role(self.role_id)
+        
+        if not role:
+            await interaction.response.send_message("❌ 設定されたロールが見つかりません。", ephemeral=True)
+            return
+
+        # メンバーが既にロールを持っているか確認
+        if role in interaction.user.roles:
+            # 持っていれば外す
+            await interaction.user.remove_roles(role)
+            await interaction.response.send_message(f"✅ ロール【**{role.name}**】を外しました！", ephemeral=True)
+        else:
+            # 持っていなければ付与
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ ロール【**{role.name}**】を付与しました！", ephemeral=True)
+
+
+# ② ボタンを並べて保持するためのViewクラス
+class RolePanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None) # パネルはずっと配置しておくためタイムアウトは無し
+
+
+# ③ 管理者だけが実行できるスラッシュコマンド本体
+@bot.tree.command(name="role_panel", description="【管理者用】ロール付与用のボタン付きパネルを作成します")
+@app_commands.describe(
+    title="パネルのタイトル（例: ゲーム選択）", 
+    description="説明文（例: 下のボタンを押すと役職がつきます）",
+    role1_id="ボタン1のロールID", role1_label="ボタン1の文字",
+    role2_id="ボタン2のロールID（任意）", role2_label="ボタン2の文字（任意）"
+)
+@app_commands.default_permissions(administrator=True) # 一般ユーザーの画面にはコマンド自体を表示させない
+async def create_role_panel(
+    interaction: discord.Interaction, 
+    title: str, 
+    description: str, 
+    role1_id: str, 
+    role1_label: str, 
+    role2_id: str = None, 
+    role2_label: str = None
+):
+    # 実行したユーザーがサーバーの管理者権限（Administrator）を持っているかチェック
+    if not interaction.permissions.administrator:
+        await interaction.response.send_message("❌ このコマンドを実行する権限（管理者権限）がありません。", ephemeral=True)
+        return
+
+    # パネルの見た目（Embed）を作成
+    embed = discord.Embed(title=title, description=description, color=discord.Color.green())
+    view = RolePanelView()
+
+    try:
+        # ボタン1の追加（必須入力）
+        view.add_item(RoleButton(role_id=int(role1_id), label=role1_label, style=discord.ButtonStyle.primary))
+        
+        # ボタン2の追加（入力されていれば追加する）
+        if role2_id and role2_label:
+            view.add_item(RoleButton(role_id=int(role2_id), label=role2_label, style=discord.ButtonStyle.success))
+            
+    except ValueError:
+        await interaction.response.send_message("❌ ロールIDは正しい「数字（ID）」を入力してください。", ephemeral=True)
+        return
+
+    # コマンドを打った本人にだけ見える完了メッセージ
+    await interaction.response.send_message("📢 ロールパネルを作成しました！", ephemeral=True)
+    
+    # チャンネルにパネルを送信
+    await interaction.channel.send(embed=embed, view=view)
 
 # ==========================================
 # ⚙️ 7. 管理者専用コマンド群 (接頭辞: !skr_)
@@ -482,16 +563,16 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
             elif not after_timeout and before_timeout:
                 log_msg = f"🔊 [タイムアウト解除]\n実行者: {user}\n対象者: {target}"
 
-    # BAN（追放）
-    elif entry.action == discord.AuditLogAction.ban_add:
+    # ★修正：ban_add ➡️ member_ban_add に変更
+    elif entry.action == discord.AuditLogAction.member_ban_add:
         log_msg = f"🔨 [BAN 執行]\n実行者: {user}\n対象者: {entry.target}\n理由: {entry.reason}"
 
-    # BAN解除
-    elif entry.action == discord.AuditLogAction.ban_remove:
+    # ★修正：ban_remove ➡️ member_ban_remove に変更
+    elif entry.action == discord.AuditLogAction.member_ban_remove:
         log_msg = f"🔓 [BAN 解除]\n実行者: {user}\n対象者: {entry.target}"
 
-    # キック（強制退出）
-    elif entry.action == discord.AuditLogAction.kick:
+    # ★修正：kick ➡️ member_kick に変更
+    elif entry.action == discord.AuditLogAction.member_kick:
         log_msg = f"👢 [キック 執行]\n実行者: {user}\n対象者: {entry.target}\n理由: {entry.reason}"
 
     # 招待リンク作成
@@ -507,6 +588,83 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
     if log_msg:
         print(log_msg)
         await send_audit_log(log_msg)
+
+from discord.ext import tasks  # 定期実行タスク用
+import xml.etree.ElementTree as ET # YouTubeの更新データ（RSS）解析用
+
+# 📺 YouTube通知の設定（お好みの情報に書き換えてください）
+YOUTUBE_CHANNEL_ID = "UCo1RH7pR_wdgY_9LKONxXvA" # チェックしたいYouTubeチャンネルのID
+NOTIFY_CHANNEL_ID = 1517395476155076728      # 通知を飛ばしたいDiscordのテキストチャンネルID
+
+# 重複通知を防ぐために、最後に検知した動画IDを記憶する変数
+last_video_id = None
+
+# 15分ごとにYouTubeをチェックするタスク（秒換算: 900秒）
+@tasks.loop(seconds=900)
+async def check_youtube_update():
+    global last_video_id
+    
+    # Botが完全に起動するまで待つ
+    await bot.wait_until_ready()
+    
+    # Discordの通知先チャンネルを取得
+    channel = bot.get_channel(NOTIFY_CHANNEL_ID)
+    if not channel:
+        return
+
+    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={YOUTUBE_CHANNEL_ID}"
+    
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            xml_data = response.read()
+            
+        # RSS(XML)の解析
+        root = ET.fromstring(xml_data)
+        
+        # XMLの名前空間対策
+        ns = {'ns': 'http://www.w3.org/2005/Atom', 'yt': 'http://www.youtube.com/xml/schemas/2015'}
+        
+        # 最新の動画エントリーを取得
+        entry = root.find('ns:entry', ns)
+        if entry is None:
+            return
+            
+        video_id = entry.find('yt:videoId', ns).text
+        video_title = entry.find('ns:title', ns).text
+        video_url = entry.find('ns:link', ns).attrib['href']
+        
+        # 初回起動時はIDを覚えるだけで通知しない（過去動画が全部流れるのを防ぐ）
+        if last_video_id == None:
+            last_video_id = video_id
+            print(f"📺 YouTube初期化: 現在の最新動画は「{video_title}」です。")
+            return
+            
+        # 記憶しているIDと違っていれば「新着動画」と判定！
+        if video_id != last_video_id:
+            last_video_id = video_id
+            
+            # Discordに新着動画を通知
+            await channel.send(
+                f"🌟 **YouTube 新着動画通知** 🌟\n"
+                f"チャンネルに新しい動画が投稿されました！\n\n"
+                f"🎥 **{video_title}**\n"
+                f"🔗 {video_url}"
+            )
+            print(f"📺 新着動画を通知しました: {video_title}")
+            
+    except Exception as e:
+        print(f"⚠️ YouTubeチェック中にエラーが発生しました: {e}")
+
+# Bot起動完了イベント（on_ready）の最後に、このタスクをスタートさせるコードを組み込みます
+# ※既存の「@bot.event async def on_ready():」の関数内の一番最後に以下を追記してください
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user.name} ({bot.user.id})")
+    
+    # YouTubeの定期チェックタスクが動いていなければ起動する
+    if not check_youtube_update.is_running():
+        check_youtube_update.start()
 
 # ==========================================
 # Botの起動
