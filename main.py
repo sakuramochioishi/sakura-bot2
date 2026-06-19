@@ -76,8 +76,7 @@ async def help_command(interaction: discord.Interaction):
         "└ クイズを出題します（ボタンで回答、制限時間付き）。\n\n"
         "⏰ **/timer [分]**\n"
         "└ 指定した分数が経過した後にメンションで通知。\n\n"
-        "🔍 **/userinfo [メンション]**\n"
-        "└ 指定したメンバー（または自分）のアカウント詳細情報を確認。"
+        
     )
     embed.add_field(name="👥 利用可能なコマンド", value=user_cmds, inline=False)
 
@@ -119,32 +118,6 @@ async def timer(interaction: discord.Interaction, minutes: int):
     await interaction.response.send_message(f"🔔 {minutes}分間のタイマーを開始しました。時間が来たらお知らせします！")
     await asyncio.sleep(minutes * 60)
     await interaction.channel.send(f"⏰ {interaction.user.mention} さん、{minutes}分が経過しました！")
-
-
-# ==========================================
-# 3. リダイレクト先チェッカー (/redirect [URL]) - 全員用
-# ==========================================
-@bot.tree.command(name="redirect", description="URLのリダイレクト先（最終的な移動先）をチェックします")
-async def check_redirect(interaction: discord.Interaction, url: str):
-    if not url.startswith(("http://", "https://")):
-        await interaction.response.send_message("❌ URLは `http://` または `https://` から始めてください。", ephemeral=True)
-        return
-
-    await interaction.response.defer()
-
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            final_url = response.geturl()
-        
-        if url == final_url:
-            await interaction.followup.send(f"🔗 **転送なし（直リンクです）**\n`{final_url}`")
-        else:
-            await interaction.followup.send(f"➡️ **リダイレクトを検出しました！**\n元のURL: <{url}>\n↓\n最終目的地: **`{final_url}`**")
-
-    except Exception as e:
-        await interaction.followup.send(f"❌ URLの解析に失敗しました。\nエラー内容: `{e}`")
-
 
 # ==========================================
 # 4. サーバー全員対象ルーレットコマンド (/roulette) - 全員用
@@ -620,8 +593,6 @@ async def check_x_update():
     except Exception as e:
         print(f"⚠️ Xチェック中にエラーが発生しました: {e}")
 
-# Bot起動完了イベント（on_ready）の最後に、このタスクをスタートさせるコードを組み込みます
-# ※既存の「on_ready」関数内の一番最後に以下をさらに追記してください
 @bot.event
 async def on_ready():
     # (既存のYouTubeタスク起動コードなどの下に追記)
