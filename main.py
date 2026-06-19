@@ -32,6 +32,9 @@ class MyBot(commands.Bot):
 # Botのインスタンスを作成
 bot = MyBot()
 
+# 📋 監査ログを送信するチャンネルのID（お使いのチャンネルIDに書き換えてください）
+LOG_CHANNEL_ID = 1516640360594538549
+
 # ==========================================
 # 🔒 セキュリティ設定（!skr_コマンドの権限制限）
 # ==========================================
@@ -51,6 +54,41 @@ async def on_command_error(ctx, error):
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name} ({bot.user.id})")
+
+
+# ==========================================
+# 🆕 0. ヘルプコマンド (/help) - 全員用
+# ==========================================
+@bot.tree.command(name="help", description="Botのコマンド一覧と使い方を表示します")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📚 sakura-bot2 コマンド一覧",
+        description="このBotで利用可能なコマンドの一覧です。\n`/` から始まるコマンドは全員が使用できます。",
+        color=discord.Color.blurple()
+    )
+
+    # 1. 一般ユーザー用（スラッシュコマンド）
+    general_cmds = (
+        "🧠 **/quiz [問題] [正解]**\n"
+        "└ 本格的な早押しクイズを出題（10分スルーで自動終了・お手付き時は他者に権利移行）。\n\n"
+        "🎯 **/roulette**\n"
+        "└ サーバー内の全メンバー（Bot除く）からランダムに1人を選出。\n\n"
+        "🔮 **/omikuji**\n"
+        "└ 今日の運勢を占います。\n\n"
+        "⏰ **/timer [分]**\n"
+        "└ 指定した時間（分単位）が経過したらメンションでお知らせ。\n\n"
+        "🔗 **/redirect [URL]**\n"
+        "└ 入力されたURLの最終的なリダイレクト先（移動先）を安全に確認。\n\n"
+        "🏮 **/koubun [言葉1] [言葉2]**\n"
+        "└ コウメ太夫風のネタ文章を生成。"
+    )
+    embed.add_field(name="👥 全員が使えるコマンド", value=general_cmds, inline=False)
+
+
+    embed.set_footer(text="sakura-bot2 • 快適なサーバーライフを！")
+    
+    # 全員が見える形で返信
+    await interaction.response.send_message(embed=embed)
 
 
 # ==========================================
@@ -168,8 +206,7 @@ async def koubun(interaction: discord.Interaction, word1: str, word2: str):
 # ==========================================
 class QuizBuzzerView(discord.ui.View):
     def __init__(self, bot, answer: str, start_time: float, embed: discord.Embed):
-        # 【変更点】10分（600秒）誰も押さなければタイムアウトして自動終了
-        super().__init__(timeout=600)
+        super().__init__(timeout=600)  # 10分
         self.bot = bot
         self.answer = answer.strip()
         self.start_time = start_time
@@ -237,7 +274,6 @@ class QuizBuzzerView(discord.ui.View):
         await self.quiz_message.edit(embed=self.base_embed, view=self)
         await announce_msg.delete()
 
-    # 10分間誰もボタンを押さずにタイムアウトした場合の処理
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
@@ -246,7 +282,6 @@ class QuizBuzzerView(discord.ui.View):
             
         if self.quiz_message:
             await self.quiz_message.edit(view=self)
-            # 【変更点】テキストを「10分間」に修正しました
             await self.quiz_message.channel.send(f"⏰ **10分間誰の解答もなかったため、クイズを終了します。**\n正解は「**{self.answer}**」でした！")
 
 @bot.tree.command(name="quiz", description="早押しクイズを出題します（間違えたら他の人に回答権が回ります）")
@@ -257,7 +292,7 @@ async def quiz(interaction: discord.Interaction, question: str, answer: str):
         description=f"【問題】\n**{question}**\n\n分かった人は下のボタンを素早くプッシュ！",
         color=discord.Color.gold()
     )
-    embed.set_footer(text="🚨 間間違えたり15秒答えないとお手付きになり、他の人が押せるようになります。")
+    embed.set_footer(text="🚨 間違えたり15秒答えないとお手付きになり、他の人が押せるようになります。")
 
     start_time = time.time()
     view = QuizBuzzerView(bot, answer, start_time, embed)
@@ -277,7 +312,7 @@ async def msg_clear(ctx, amount: int):
         await ctx.send("1以上の数値を指定してください。", delete_after=5)
         return
     deleted = await ctx.channel.purge(limit=amount + 1)
-    await ctx.send(f"🧹 正常に {len(deleted) - 1} 件のメッセージを削除しました！", delete_after=5)
+    await ctx.send(f"🧹 正常に {len(deleted) - 1} 件 of メッセージを削除しました！", delete_after=5)
 
 # ② 所属サーバー確認コマンド
 @bot.command(name="servers")
@@ -332,10 +367,55 @@ async def ping_check(ctx):
 # ⑥ Botを強制終了（再起動）させるコマンド
 @bot.command(name="restart")
 async def restart_bot(ctx):
-    await ctx.send(" **再起動処理を実行中**")
+    await ctx.send("**再起動処理を実行中**")
     print("管理者コマンドにより、プログラムを終了します。")
     await bot.close()
     sys.exit(0)
+
+# ==========================================
+# 🔒 セキュリティ設定 & 📋 監査ログ機能
+# ==========================================
+@bot.check
+async def globally_restrict_to_owner(ctx):
+    # 管理者専用コマンド（!skr_）が実行されたときのログ処理
+    log_msg = f"🛡️ [管理者コマンド実行] ユーザー: {ctx.author} (ID: {ctx.author.id}) | コマンド: {ctx.message.content}"
+    print(log_msg)
+    
+    # Discordのログチャンネルに送信
+    bot.loop.create_task(send_audit_log(log_msg))
+    
+    return await bot.is_owner(ctx.author)
+
+@bot.event
+async def on_app_command_completion(interaction: discord.Interaction, command: app_commands.Command):
+    # スラッシュコマンド（/）が正常に実行完了したときのログ処理
+    # 引数（options）があればそれも記録する
+    options = ", ".join([f"{k}: {v}" for k, v in interaction.namespace.__dict__.items()])
+    opt_text = f" (引数: {options})" if options else ""
+    
+    log_msg = f"⚙️ [スラッシュコマンド] ユーザー: {interaction.user} | コマンド: /{command.name}{opt_text} | サーバー: {interaction.guild.name if interaction.guild else 'DM'}"
+    print(log_msg)
+    
+    await send_audit_log(log_msg)
+
+@bot.event
+async def on_command_error(ctx, error):
+    # 権限がない人が!skr_コマンドを打った場合の不正アクセスログ
+    if isinstance(error, commands.NotOwner):
+        log_msg = f"⚠️ [不正アクセス検出] 権限のないユーザーが管理者コマンドを試行しました。\nユーザー: {ctx.author} (ID: {ctx.author.id}) | 内容: {ctx.message.content}"
+        print(log_msg)
+        await send_audit_log(log_msg)
+        return
+    if isinstance(error, commands.CommandNotFound):
+        return
+    raise error
+
+# ログを共通で送信するための補助関数
+async def send_audit_log(message_text: str):
+    channel = bot.get_channel(LOG_CHANNEL_ID)
+    if channel:
+        # メンションが無闇に飛ばないようにプレーンテキストで送信
+        await channel.send(f"```{message_text}```")
 
 
 # ==========================================
