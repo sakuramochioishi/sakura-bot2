@@ -13,6 +13,11 @@ import datetime
 # .envファイルから環境変数を読み込む
 load_dotenv()
 TOKEN = os.getenv("token")
+YOUTUBE_CHANNEL_ID = os.getenv("youtubeid")
+NOTIFY_CHANNEL_ID = os.getenv("cid12")
+X_RSS_URL = os.getenv("xid")
+X_NOTIFY_CHANNEL_ID = os.getenv("chid1")
+
 
 # 全てのインテントを有効化
 intents = discord.Intents.all()
@@ -48,14 +53,6 @@ async def on_command_error(ctx, error):
     if isinstance(error, (commands.NotOwner, commands.CommandNotFound)):
         return
     raise error
-
-# ==========================================
-# 🟢 起動確認イベント
-# ==========================================
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user.name} ({bot.user.id})")
-
 
 # ==========================================
 # 🆕 0. ヘルプコマンド (/help) - 全員用
@@ -529,13 +526,7 @@ async def check_youtube_update():
 
 # Bot起動完了イベント（on_ready）の最後に、このタスクをスタートさせるコードを組み込みます
 # ※既存の「@bot.event async def on_ready():」の関数内の一番最後に以下を追記してください
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user.name} ({bot.user.id})")
-    
-    # YouTubeの定期チェックタスクが動いていなければ起動する
-    if not check_youtube_update.is_running():
-        check_youtube_update.start()
+
 
 # 🐦 X（旧Twitter）通知の設定
 # ※あらかじめ外部サービス等で作成した「XアカウントのRSSフィードURL」をここに貼り付けます
@@ -598,6 +589,8 @@ async def on_ready():
     # (既存のYouTubeタスク起動コードなどの下に追記)
     if not check_x_update.is_running():
         check_x_update.start()
+    if not check_youtube_update.is_running():
+        check_youtube_update.start()
 
 # ==========================================
 # Botの起動
