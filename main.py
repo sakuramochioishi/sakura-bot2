@@ -460,9 +460,7 @@ async def skr_help_command(ctx):
 from discord.ext import tasks  # 定期実行タスク用
 import xml.etree.ElementTree as ET # YouTubeの更新データ（RSS）解析用
 
-# 📺 YouTube通知の設定（お好みの情報に書き換えてください）
-YOUTUBE_CHANNEL_ID = "UCo1RH7pR_wdgY_9LKONxXvA" # チェックしたいYouTubeチャンネルのID
-NOTIFY_CHANNEL_ID = 1517395476155076728      # 通知を飛ばしたいDiscordのテキストチャンネルID
+
 
 # 重複通知を防ぐために、最後に検知した動画IDを記憶する変数
 last_video_id = None
@@ -524,14 +522,8 @@ async def check_youtube_update():
     except Exception as e:
         print(f"⚠️ YouTubeチェック中にエラーが発生しました: {e}")
 
-# Bot起動完了イベント（on_ready）の最後に、このタスクをスタートさせるコードを組み込みます
-# ※既存の「@bot.event async def on_ready():」の関数内の一番最後に以下を追記してください
 
 
-# 🐦 X（旧Twitter）通知の設定
-# ※あらかじめ外部サービス等で作成した「XアカウントのRSSフィードURL」をここに貼り付けます
-X_RSS_URL = "https://rss.app/feeds/o0UUr09aLtvjb39n.xml" 
-X_NOTIFY_CHANNEL_ID = 1517444749743751169 # 通知を飛ばしたい管理鯖のチャンネルID
 
 # 重複通知を防ぐために、最後に検知したポストのURL（またはID）を記憶する変数
 last_tweet_url = None
