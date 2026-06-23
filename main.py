@@ -14,16 +14,24 @@ class MyBot(commands.Bot):
     def __init__(self):
         # 接頭辞を !skr_ に設定
         super().__init__(command_prefix="!skr_", intents=intents)
+        
+        # 🌟 デフォルトのヘルプコマンドをここで削除（クラスの中に書くのが正解）
+        self.remove_command("help")
 
     async def setup_hook(self):
-        # 📁 cogsフォルダ内の3つのファイルを読み込む
-        extensions = ["cogs.help", "cogs.commands", "cogs.tasks"]
-        for ext in extensions:
-            try:
-                await self.load_extension(ext)
-                print(f"✅ {ext} を読み込みました")
-            except Exception as e:
-                print(f"❌ {ext} の読み込みに失敗しました: {e}")
+        # 📁 cogs フォルダの中にある拡張子 .py のファイルを自動でループして読み込む
+        cogs_dir = "./cogs"
+        if os.path.exists(cogs_dir):
+            for filename in os.listdir(cogs_dir):
+                if filename.endswith(".py"):
+                    cog_name = f"cogs.{filename[:-3]}"
+                    try:
+                        await self.load_extension(cog_name)
+                        print(f"✅ {cog_name} を読み込みました")
+                    except Exception as e:
+                        print(f"❌ {cog_name} の読み込みに失敗しました: {e}")
+        else:
+            print("⚠️ cogs フォルダが見つかりません。")
 
         # スラッシュコマンドをDiscordに同期
         try:
@@ -32,7 +40,7 @@ class MyBot(commands.Bot):
         except Exception as e:
             print(f"同期エラー: {e}")
 
-# Botのインスタンスを作成
+# Botのインスタンスを作成（ここで初めてbotが作られます）
 bot = MyBot()
 
 # 👑 オーナー（あなた）限定の全体制限ルールを設定
