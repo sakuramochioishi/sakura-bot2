@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string
 import db_manager
 
 app = Flask(__name__)
@@ -7,70 +7,111 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Bot リアルタイムグラフモニター</title>
-    <meta http-equiv="refresh" content="10"> <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>Sakura Bot 2 総合ダッシュボード</title>
+    <meta http-equiv="refresh" content="5"> <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #0e1626; color: #fff; margin: 40px; text-align: center; }
-        .monitor-card { max-width: 600px; margin: 0 auto; background: #1b263b; padding: 30px; border-radius: 15px; box-shadow: 0 8px 20px rgba(0,0,0,0.5); border: 1px solid #00b4d8; }
-        h1 { color: #00b4d8; font-size: 24px; margin-bottom: 25px; }
-        .stat-box { margin: 20px 0; padding: 10px; background: #0d1b2a; border-radius: 10px; font-size: 16px; }
-        .chart-container { background: #0d1b2a; padding: 20px; border-radius: 10px; margin-top: 20px; }
-        .footer { font-size: 12px; color: #64ffda; margin-top: 20px; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 40px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: #38bdf8; text-align: center; margin-bottom: 30px; font-size: 28px; }
+        
+        /* 👥 ステータスカードの並び */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+        .card { background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; text-align: center; }
+        .card h2 { margin: 0; font-size: 14px; color: #94a3b8; text-transform: uppercase; }
+        .card .stat { font-size: 36px; font-weight: bold; color: #f43f5e; margin-top: 10px; }
+        .card .stat.user { color: #10b981; }
+
+        /* 📊 グラフとログのエリア */
+        .main-content { background: #1e293b; padding: 25px; border-radius: 12px; border: 1px solid #334155; margin-bottom: 30px; }
+        .main-content h3 { margin-top: 0; color: #38bdf8; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+        
+        .chart-box { max-width: 400px; margin: 0 auto 30px auto; }
+
+        /* 📜 ログのタイムライン */
+        .log-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
+        .log-table th { color: #94a3b8; padding: 10px; border-bottom: 2px solid #334155; }
+        .log-table td { padding: 10px; border-bottom: 1px solid #334155; font-family: monospace; }
+        .log-time { color: #64748b; width: 160px; }
+        .log-msg { color: #38bdf8; }
+        
+        .footer { text-align: center; font-size: 12px; color: #475569; margin-top: 20px; }
     </style>
 </head>
 <body>
-<div class="monitor-card">
-    <h1>📊 Bot リアルタイム回線モニター</h1>
+<div class="container">
+    <h1>🌸 Sakura Bot 2 総合運用ダッシュボード</h1>
     
-    <div class="stat-box">
-        🎭 ステータス: <strong>{{ status_text }}</strong>
+    <div class="grid">
+        <div class="card">
+            <h2>🌐 参加サーバー数</h2>
+            <div class="stat">{{ guild_count }}</div>
+        </div>
+        <div class="card">
+            <h2>👥 合計所属ユーザー数</h2>
+            <div class="stat user">{{ user_count }}</div>
+        </div>
     </div>
 
-    <div class="chart-container">
-        <canvas id="pingChart"></canvas>
+    <div class="main-content">
+        <h3>📊 コマンド実行の割合</h3>
+        <div class="chart-box">
+            <canvas id="cmdChart"></canvas>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <h3>📜 最新のBot動作ログ (直近10件)</h3>
+        <table class="log-table">
+            <thead>
+                <tr>
+                    <th>発生時刻</th>
+                    <th>ログ内容</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for timestamp, message in logs %}
+                <tr>
+                    <td class="log-time">{{ timestamp }}</td>
+                    <td class="log-msg">{{ message }}</td>
+                </tr>
+                {% endfor %}
+                {% if not logs %}
+                <tr>
+                    <td colspan="2" style="text-align: center; color: #475569;">ログはまだありません</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
     </div>
 
     <div class="footer">
-        🔄 最終更新: {{ last_update }} (10秒ごとに自動更新)
+        🔄 5秒ごとに自動更新中
     </div>
 </div>
 
 <script>
-    // Python側から渡されたデータをJavaScriptに変換
-    const labels = {{ labels | tojson }};
-    const data = {{ data | tojson }};
+    const labels = {{ chart_labels | tojson }};
+    const data = {{ chart_data | tojson }};
 
-    const ctx = document.getElementById('pingChart').getContext('2d');
-    const pingChart = new Chart(ctx, {
-        type: 'line', // 折れ線グラフ
+    const ctx = document.getElementById('cmdChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar', // 📊 棒グラフで見やすく表示
         data: {
             labels: labels,
             datasets: [{
-                label: 'Ping値 (ms)',
+                label: '実行回数',
                 data: data,
-                borderColor: '#52b788',
-                backgroundColor: 'rgba(82, 183, 136, 0.2)',
-                borderWidth: 3,
-                tension: 0.3, // 線のなめらかさ
-                fill: true
+                backgroundColor: '#38bdf8',
+                borderRadius: 5
             }]
         },
         options: {
             responsive: true,
             scales: {
-                y: {
-                    beginAtZero: true,
-                    grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                    ticks: { color: '#8892b0' }
-                },
-                x: {
-                    grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                    ticks: { color: '#8892b0' }
-                }
+                y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
             },
-            plugins: {
-                legend: { labels: { color: '#fff' } }
-            }
+            plugins: { legend: { display: false } }
         }
     });
 </script>
@@ -80,15 +121,17 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    status_text, last_update = db_manager.get_status_text()
-    labels, data = db_manager.get_ping_history()
+    guild_count, user_count = db_manager.get_bot_counts()
+    chart_labels, chart_data = db_manager.get_command_stats()
+    logs = db_manager.get_logs()
     
     return render_template_string(
         HTML_TEMPLATE,
-        status_text=status_text,
-        last_update=last_update,
-        labels=labels,
-        data=data
+        guild_count=guild_count,
+        user_count=user_count,
+        chart_labels=chart_labels,
+        chart_data=chart_data,
+        logs=logs
     )
 
 if __name__ == '__main__':
