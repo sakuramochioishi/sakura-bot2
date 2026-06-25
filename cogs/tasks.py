@@ -4,17 +4,62 @@ from discord.ext import commands, tasks
 import urllib.request
 import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
+import websockets
+import json
+import os
+from urllib.parse import urlparse, parse_qs
+import db_manager
+import asyncio
 
 # 🌟 db_manager をインポート
 import db_manager
 
 load_dotenv()
 
+# 📡 接続中のあなたのダッシュボードを管理するセット
+connected_clients = set()
+
+async def ws_handler(websocket):
+    """WebSocketの接続要求を処理する関数"""
+    query = parse_qs(urlparse(websocket.path).query)
+    token = query.get("token", [None])[0]
+
+    if token != os.getenv("DASHBOARD_SECRET_TOKEN"):
+        await websocket.close(code=4003)
+        return
+
+    connected_clients.add(websocket)
+    print(f"📡 聡人さんのダッシュボードが接続しました！ ({websocket.remote_address})")
+
+    try:
+        g_count, u_count = db_manager.get_bot_counts()
+        labels, counts = db_manager.get_command_stats()
+        
+        init_payload = {
+            "type": "init",
+            "guild_count": g_count,
+            "user_count": u_count,
+            "chart_labels": labels,
+            "chart_data": counts,
+            "logs": db_manager.get_recent_logs_list(20)
+        }
+        await websocket.send(json.dumps(init_payload, ensure_ascii=False))
+
+        async for message in websocket:
+            pass
+            
+    except websockets.ConnectionClosed:
+        pass
+    finally:
+        connected_clients.remove(websocket)
+        print("🔌 ダッシュボードが切断されました")
+
 class TasksCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.last_video_id = None
         self.last_tweet_url = None
+        self.bot.loop.create_task(self.start_ws_server())
         
         # ⏰ YouTubeとXの通知タスクだけをスタート（Pingタスクは削除！）
         self.check_youtube_update.start()
@@ -125,6 +170,44 @@ class TasksCog(commands.Cog):
                 print(f"🐦 新着ポストを通知しました: {tweet_title[:15]}...")
         except Exception as e:
             print(f"⚠️ Xチェック中にエラーが発生しました: {e}")
+    async def start_ws_server(self):
+        """Ubuntu Serverのポート8080でWebSocket待ち受けを開始"""
+        async with websockets.serve(ws_handler, "127.0.0.1", 7001):
+            await asyncio.Future()
+
+    @commands.Cog.listener()
+    async def on_app_command_completion(self, interaction: discord.Interaction, command: discord.app_commands.Command):
+        """📊 スラッシュコマンドが正常に完了したときに動くトリガー"""
+        cmd_name = command.name
+        log_msg = f"💻 コマンド実行: /{cmd_name} (ユーザー: {interaction.user.name})"
+        
+        # 1️⃣ 友人のUbuntu側のSQLiteに保存
+        if cmd_name not in ['help', 'skr_help', 'youtube_check', 'x_check']:
+            db_manager.increment_command('other')
+        else:
+            db_manager.increment_command(cmd_name)
+        db_manager.add_log(log_msg)
+
+        # 2️⃣ 今まさに画面を開いている聡人さんのダッシュボードへリアルタイムで速達
+        if connected_clients:
+            g_count = len(self.bot.guilds)
+            u_count = sum(g.member_count for g in self.bot.guilds if g.member_count)
+            labels, counts = db_manager.get_command_stats()
+            
+            from datetime import datetime
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            update_payload = {
+                "type": "update",
+                "log": f"[{now_str}] {log_msg}",
+                "guild_count": g_count,
+                "user_count": u_count,
+                "chart_labels": labels,
+                "chart_data": counts
+            }
+            await asyncio.gather(*[client.send(json.dumps(update_payload, ensure_ascii=False)) for client in connected_clients])
+
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TasksCog(bot))
