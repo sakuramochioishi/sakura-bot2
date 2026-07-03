@@ -2,10 +2,6 @@ import os
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-import asyncio
-
-# 🌟 db_manager をインポート
-import db_manager
 
 load_dotenv()
 TOKEN = os.getenv("token")
@@ -18,6 +14,8 @@ class MyBot(commands.Bot):
         self.remove_command("help")
 
     async def setup_hook(self):
+        self.tree.on_error = self.on_tree_error  # エラーハンドラ
+        
         cogs_dir = "./cogs"
         if os.path.exists(cogs_dir):
             for filename in os.listdir(cogs_dir):
@@ -38,23 +36,14 @@ class MyBot(commands.Bot):
     async def on_ready(self):
         """Botがログインしたときに動く処理"""
         print(f"Logged in as {self.user.name} ({self.user.id})")
-        # 💡 起動時のカウント処理を、安全のために裏で10秒後に実行するよう予約する
-        self.loop.create_task(self.initial_sync_dashboard())
 
-    async def initial_sync_dashboard(self):
-        """起動から10秒待って、確実にサーバー情報を取得・同期する関数"""
-        await asyncio.sleep(10)  # 10秒間、Discordのデータ受信をじっと待つ
-        
-        guild_count = len(self.guilds)
-        user_count = sum(guild.member_count for guild in self.guilds if guild.member_count)
-        
-        # 💾 データベースに書き込み
-        db_manager.update_bot_counts(guild_count, user_count)
-        db_manager.add_log(f"🤖 Sakura Bot 2 が正常に起動しました！({guild_count}本 / {user_count}人)")
-        
-        print(f"📊 【確実同期完了】 {guild_count}サーバー / {user_count}ユーザー をダッシュボードに反映しました")
+    async def on_tree_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+        """スラッシュコマンドでエラーが出た場合の共通受け皿"""
+        print(f"⚠️ コマンドエラー発生: {error}")
 
 bot = MyBot()
+
+# 🛠️ エラーの原因になっていた @bot.tree.before_command のブロックは綺麗に削除しました
 
 @bot.check
 async def globally_restrict_to_owner(ctx):

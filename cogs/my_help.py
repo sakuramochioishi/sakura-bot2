@@ -8,6 +8,9 @@ class HelpCog(commands.Cog):
 
     @app_commands.command(name="help", description="Botのコマンド一覧と使い方を表示します")
     async def help_command(self, interaction: discord.Interaction):
+        # 💡 【重要】データベース処理の遅延対策として、まず3秒の返答制限を15分に引き伸ばす
+        await interaction.response.defer()
+
         embed = discord.Embed(
             title="📚 sakura-bot2 コマンド一覧",
             description="このBotで利用可能なコマンドの一覧です。\n`/` から始まるコマンドは全員が使用できます。",
@@ -31,7 +34,9 @@ class HelpCog(commands.Cog):
 
         bot_avatar = self.bot.user.display_avatar.url if self.bot.user.avatar else None
         embed.set_footer(text="SAKURA-BOT System", icon_url=bot_avatar)
-        await interaction.response.send_message(embed=embed)
+        
+        # 💡 deferした後は send_message ではなく followup.send で送信する
+        await interaction.followup.send(embed=embed)
 
     @commands.command(name="help")
     async def skr_help_command(self, ctx):
