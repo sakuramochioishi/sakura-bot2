@@ -124,16 +124,16 @@ class JankenCog(commands.Cog):
         except Exception as e:
             traceback.print_exc()
 
-    # 🏆 【新コマンド】じゃんけんランキングを表示する
+   # 🏆 【修正版】じゃんけんランキングを表示する
     @app_commands.command(name="janken_ranking", description="じゃんけんの勝ち数ランキングトップ10を表示します！")
     async def janken_ranking(self, interaction: discord.Interaction):
         try:
-            await interaction.response.defer() # 念のため処理中マーク
-            
+            # 💡 defer() を削除し、直接データを取得して一発で送信します
             top_users = db_manager.get_top_ranking(limit=10)
             
             if not top_users:
-                await interaction.edit_original_response(content="📊 まだ誰もじゃんけんで勝っていません！最初の勝者を目指しましょう！")
+                # edit_original_response ではなく send_message に変更
+                await interaction.response.send_message(content="📊 まだ誰もじゃんけんで勝っていません！最初の勝者を目指しましょう！")
                 return
 
             embed = discord.Embed(title="🏆 じゃんけん最強ランキング (TOP 10)", color=discord.Color.gold())
@@ -142,22 +142,21 @@ class JankenCog(commands.Cog):
             medals = ["🥇", "🥈", "🥉"]
             
             for i, (user_id, wins) in enumerate(top_users):
-                # 順位のアイコン（1〜3位はメダル、それ以外は数字）
                 rank_icon = medals[i] if i < 3 else f"**{i+1}位**"
                 
-                # ユーザーのメンション（または名前）を解決する
                 member = interaction.guild.get_member(user_id)
                 user_str = member.mention if member else f"退会したユーザー ({user_id})"
                 
                 ranking_text += f"{rank_icon} ── {user_str} ： **{wins}勝**\n"
 
             embed.description = ranking_text
-            await interaction.edit_original_response(embed=embed)
+            # 💡 edit_original_response ではなく send_message に変更
+            await interaction.response.send_message(embed=embed)
             
         except Exception as e:
             print(f"❌ ランキング表示エラー: {e}")
             traceback.print_exc()
-
+            
 async def setup(bot: commands.Bot):
     await bot.add_cog(JankenCog(bot))
     await bot.tree.sync()
