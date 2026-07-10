@@ -78,3 +78,9 @@ if TOKEN:
     bot.run(TOKEN)
 else:
     print("エラー: .env から 'token' が読み込めませんでした。")
+   
+    # 📄 main.py の上のほうの import に追加
+import db_manager
+
+# 📄 main.py の一番下（bot.run の直前など）に追加
+db_manager.init_db()  # 👈 起動時にデータベースを準備する
