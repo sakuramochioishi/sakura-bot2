@@ -35,15 +35,20 @@ class GreetingsCog(commands.Cog):
                 self.last_greet_times[channel_id] = current_time
             return
         
-        if "やぁ" in content:
+        lower_content = content.lower().strip()
+
+        # ── 👋 「やぁ」シリーズの判定（5秒制限あり） ──
+        ya_words = ["や", "やぁ", "ya", "yala", "yaxa"]
+        if lower_content in ya_words:
             last_time = self.last_greet_times.get(channel_id, 0)
             if current_time - last_time >= 5.0:
                 await message.channel.send(f"やぁ")
                 self.last_greet_times[channel_id] = current_time
             return
 
-        
-        if "よぉ" in content:
+        # ── 😎 【新機能】「よぉ」シリーズの判定（5秒制限あり） ──
+        yo_words = ["よ", "よぉ", "yo", "yoxo", "yolo"] # 💡 完全一致で反応させたいバリエーション
+        if lower_content in yo_words:
             last_time = self.last_greet_times.get(channel_id, 0)
             if current_time - last_time >= 5.0:
                 await message.channel.send(f"よぉ")
