@@ -111,6 +111,10 @@ class JankenCog(commands.Cog):
         try:
             challenger = interaction.user
             
+            if 相手 is not None and 相手.bot and 相手.id != self.bot.user.id:
+                await interaction.response.send_message("❌ 他のbotとじゃんけんすることはできません!", ephemeral=True)
+                return
+            
             if 相手 is None or 相手.id == self.bot.user.id:
                 opponent = self.bot.user
                 is_bot = True
@@ -135,4 +139,4 @@ class JankenCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(JankenCog(bot))
-    await bot.tree.sync()
+    await bot.tree.sync()   
