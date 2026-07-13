@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import time
 
+# 📯 挨拶機能のコグ
 class GreetingsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -47,20 +48,21 @@ class GreetingsCog(commands.Cog):
             return
 
         # ── 😎 【新機能】「よぉ」シリーズの判定（5秒制限あり） ──
-        yo_words = ["よ", "よぉ", "yo", "yoxo", "yolo"] # 💡 完全一致で反応させたいバリエーション
+        yo_words = ["よ", "よぉ", "yo", "yoxo", "yolo"] 
         if lower_content in yo_words:
             last_time = self.last_greet_times.get(channel_id, 0)
             if current_time - last_time >= 5.0:
                 await message.channel.send(f"よぉ")
                 self.last_greet_times[channel_id] = current_time
             return
-        
-        class ModerationCog(commands.Cog):
-         def __init__(self, bot: commands.Bot):
-          self.bot = bot
+
+
+# 🛡️ モデレーション機能のコグ（独立させました）
+class ModerationCog(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
         # ❌ 反応させたいNGワード（削除対象）のリスト
-        # ※すべて小文字で判定するため、アルファベットは小文字で登録してください
-        self.ng_words = ["おおw", "うおw", "oow", "uow"]
+        self.ng_words = ["おおw", "うおw", "oow", "uow", "おおｗ", "うおｗ"]
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -69,11 +71,10 @@ class GreetingsCog(commands.Cog):
         if message.author.bot:
             return
 
-        # メッセージのテキストを小文字にして取得（大文字小文字のズレを防ぐ）
+        # メッセージのテキストを小文字にして取得
         content = message.content.lower()
 
         # リストの中のNGワードがメッセージに含まれているかチェック
-        # （一部分でも含まれていたら反応します）
         for ng_word in self.ng_words:
             if ng_word in content:
                 try:
@@ -81,19 +82,16 @@ class GreetingsCog(commands.Cog):
                     await message.delete()
                     
                     # 2️⃣ 代わりのメッセージをチャンネルに送信する
-                    # （誰のメッセージを消したか分かりやすいようにメンションを付けています）
-                    await message.channel.send(
-                        f"⚠️ 冷笑を感知し削除しました！"
-                    )
-                    
-                    # 1つでも見つかったらそこでこのメッセージへの処理は終わる
+                    await message.channel.send("⚠️ 冷笑を感知し削除しました！")
                     return 
                     
                 except discord.Forbidden:
-                    # Botに「メッセージの管理」権限がない場合のエラー回避
-                    print(f"❌ 権限が足りないため、メッセージを削除できませんでした。")
+                    print("❌ 権限が足りないため、メッセージを削除できませんでした。")
                 except Exception as e:
                     print(f"❌ エラーが発生しました: {e}")
 
+
+# ⚙️ 両方のコグをBotに登録する
 async def setup(bot: commands.Bot):
     await bot.add_cog(GreetingsCog(bot))
+    await bot.add_cog(ModerationCog(bot))  # ← ここでモデレーション機能も読み込むようにしました！
