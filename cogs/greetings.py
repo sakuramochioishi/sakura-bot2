@@ -62,7 +62,7 @@ class ModerationCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         # ❌ 反応させたいNGワード（削除対象）のリスト
-        self.ng_words = ["おおw", "うおw", "oow", "uow", "おおｗ", "うおｗ"]
+        self.ng_words = ["おおw", "うおw", "oow", "uow", "おおｗ", "うおｗ", "うお", "uo"]
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -82,7 +82,7 @@ class ModerationCog(commands.Cog):
                     await message.delete()
                     
                     # 2️⃣ 代わりのメッセージをチャンネルに送信する
-                    await message.channel.send("⚠️ 冷笑を感知し削除しました！")
+                    await message.channel.send("⚠️ 冷笑を検知し削除しました！")
                     return 
                     
                 except discord.Forbidden:
