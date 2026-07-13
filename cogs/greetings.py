@@ -54,6 +54,46 @@ class GreetingsCog(commands.Cog):
                 await message.channel.send(f"よぉ")
                 self.last_greet_times[channel_id] = current_time
             return
+        
+        class ModerationCog(commands.Cog):
+         def __init__(self, bot: commands.Bot):
+          self.bot = bot
+        # ❌ 反応させたいNGワード（削除対象）のリスト
+        # ※すべて小文字で判定するため、アルファベットは小文字で登録してください
+        self.ng_words = ["おおw", "うおw", "oow", "uow"]
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """💬 誰かがメッセージを送信したときに動くイベント"""
+        # Bot自身の発言には反応しない（無限ループ防止）
+        if message.author.bot:
+            return
+
+        # メッセージのテキストを小文字にして取得（大文字小文字のズレを防ぐ）
+        content = message.content.lower()
+
+        # リストの中のNGワードがメッセージに含まれているかチェック
+        # （一部分でも含まれていたら反応します）
+        for ng_word in self.ng_words:
+            if ng_word in content:
+                try:
+                    # 1️⃣ 検知したメッセージを削除する
+                    await message.delete()
+                    
+                    # 2️⃣ 代わりのメッセージをチャンネルに送信する
+                    # （誰のメッセージを消したか分かりやすいようにメンションを付けています）
+                    await message.channel.send(
+                        f"⚠️ 冷笑を感知し削除しました！"
+                    )
+                    
+                    # 1つでも見つかったらそこでこのメッセージへの処理は終わる
+                    return 
+                    
+                except discord.Forbidden:
+                    # Botに「メッセージの管理」権限がない場合のエラー回避
+                    print(f"❌ 権限が足りないため、メッセージを削除できませんでした。")
+                except Exception as e:
+                    print(f"❌ エラーが発生しました: {e}")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(GreetingsCog(bot))

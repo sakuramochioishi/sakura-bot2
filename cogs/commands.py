@@ -26,8 +26,9 @@ class RolePanelView(discord.ui.View):
 
 # --- 早押しクイズ用のView ---
 class QuizBuzzerView(discord.ui.View):
-    def __init__(self, bot, answer: str, start_time: float, embed: discord.Embed):
-        super().__init__(timeout=600)
+    def __init__(self, bot, answer: str, start_time: float, embed: discord.Embed, quiz_timeout: float = 60.0, answer_timeout: float = 15.0):
+        # 💡 quiz_timeout（問題全体の制限時間）を外部から受け取れるように変更
+        super().__init__(timeout=quiz_timeout)
         self.bot = bot
         self.answer = answer.strip()
         self.start_time = start_time
@@ -35,6 +36,9 @@ class QuizBuzzerView(discord.ui.View):
         self.is_processing = False
         self.wrong_users = set()
         self.quiz_message = None
+        
+        # 💡 カスタム可能な時間制限を保持
+        self.answer_timeout = answer_timeout  # ボタンを押してからの回答時間（秒）
 
     @discord.ui.button(label="押しボタン 🔴", style=discord.ButtonStyle.danger)
     async def press_buzzer(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -54,14 +58,15 @@ class QuizBuzzerView(discord.ui.View):
         elapsed_time = time.time() - self.start_time
         announce_msg = await interaction.channel.send(
             f"📢 **早押し成功！** （タイム: `{elapsed_time:.2f}秒` ⏱️）\n"
-            f"解答権： {interaction.user.mention} さん！\n🚨 **15秒以内**に答えを入力してください！"
+            f"解答権： {interaction.user.mention} さん！\n🚨 **{int(self.answer_timeout)}秒以内**に答えを入力してください！"
         )
 
         def check_answer(msg):
             return msg.author == interaction.user and msg.channel == interaction.channel
 
         try:
-            user_msg = await self.bot.wait_for('message', check=check_answer, timeout=15.0)
+            # 💡 カスタムされた回答時間（self.answer_timeout）を使用
+            user_msg = await self.bot.wait_for('message', check=check_answer, timeout=self.answer_timeout)
             if user_msg.content.strip().lower() == self.answer.lower():
                 await user_msg.reply(f"🎉 **正解！！**\n答えは「**{self.answer}**」でした！")
                 self.stop()
@@ -80,6 +85,7 @@ class QuizBuzzerView(discord.ui.View):
         button.style = discord.ButtonStyle.danger
         button.label = "押しボタン 🔴"
         
+        # メンションのテキスト変換
         lost_mentions = [f"<@{uid}>" for uid in self.wrong_users]
         self.base_embed.set_footer(text=f"※解答権喪失: {', '.join(lost_mentions)}\nまだの人はボタンを押せます！")
         await self.quiz_message.edit(embed=self.base_embed, view=self)
@@ -89,17 +95,23 @@ class QuizBuzzerView(discord.ui.View):
             pass
 
     async def on_timeout(self):
+        """⏰ 問題全体の制限時間が切れたときの処理"""
         for item in self.children:
             item.disabled = True
             item.label = "時間切れ ⏰"
             item.style = discord.ButtonStyle.secondary
+            
         if self.quiz_message:
             try:
+                # 元々のクイズのボタンを「時間切れ」に更新
                 await self.quiz_message.edit(view=self)
-                await self.quiz_message.channel.send(f"⏰ **クイズを終了します。**\n正解は「**{self.answer}**」でした！")
+                
+                # 💡 【新機能】元の問題メッセージ（self.quiz_message）にリプライする形で答えを表示！
+                await self.quiz_message.reply(
+                    f"⏰ **時間切れでクイズ終了です！**\n正解は「**{self.answer}**」でした！"
+                )
             except discord.NotFound:
                 pass
-
 
 # --- ルーレット用のView ---
 class MemberRouletteView(discord.ui.View):
@@ -129,7 +141,7 @@ class CommandsCog(commands.Cog):
 
     @app_commands.command(name="omikuji", description="今日のおみくじを引きます")
     async def omikuji(self, interaction: discord.Interaction):
-        fortunes = ["大吉 🌟", "吉 🎯", "中吉 😊", "小吉 👍", "末吉 🌿", "凶 👻"]
+        fortunes = ["大吉 🌟", "吉 🎯", "中吉 😊", "小吉 👍", "末吉 🌿", "凶 👻", "半吉", "元凶", "大凶", "反凶", "大狂", "狂"]
         result = random.choice(fortunes)
         await interaction.response.send_message(f"{interaction.user.mention} さんの今日の運勢は... **{result}** です！")
 
