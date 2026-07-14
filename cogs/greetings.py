@@ -20,38 +20,38 @@ class GreetingsCog(commands.Cog):
         content = message.content
         current_time = time.time()
 
-        # ── ☀️ 「おはよう」の判定（5秒制限あり） ──
+        # ── ☀️ 「おはよう」の判定
         if "おはよう" in content:
             last_time = self.last_greet_times.get(channel_id, 0)
-            if current_time - last_time >= 5.0:
+            if current_time - last_time >= 900.0:
                 await message.channel.send(f"おはようございます、{message.author.display_name}さん！今日も頑張りましょう！☀️")
                 self.last_greet_times[channel_id] = current_time
             return
 
-        # ── 🌙 「おやすみ」の判定（5秒制限あり） ──
+        # ── 🌙 「おやすみ」の判定
         if "おやすみ" in content:
             last_time = self.last_greet_times.get(channel_id, 0)
-            if current_time - last_time >= 5.0:
+            if current_time - last_time >= 900.0:
                 await message.channel.send(f"おやすみなさい、{message.author.display_name}さん。良い夢を！🌙")
                 self.last_greet_times[channel_id] = current_time
             return
         
         lower_content = content.lower().strip()
 
-        # ── 👋 「やぁ」シリーズの判定（5秒制限あり） ──
+        # ── 👋 「やぁ」シリーズの判定
         ya_words = ["や", "やぁ", "ya", "yala", "yaxa"]
         if lower_content in ya_words:
             last_time = self.last_greet_times.get(channel_id, 0)
-            if current_time - last_time >= 5.0:
+            if current_time - last_time >= 900.0:
                 await message.channel.send(f"やぁ")
                 self.last_greet_times[channel_id] = current_time
             return
 
-        # ── 😎 【新機能】「よぉ」シリーズの判定（5秒制限あり） ──
+        # ── 😎 【新機能】「よぉ」シリーズの判定
         yo_words = ["よ", "よぉ", "yo", "yoxo", "yolo"] 
         if lower_content in yo_words:
             last_time = self.last_greet_times.get(channel_id, 0)
-            if current_time - last_time >= 5.0:
+            if current_time - last_time >= 900.0:
                 await message.channel.send(f"よぉ")
                 self.last_greet_times[channel_id] = current_time
             return
@@ -82,7 +82,7 @@ class ModerationCog(commands.Cog):
                     await message.delete()
                     
                     # 2️⃣ 代わりのメッセージをチャンネルに送信する
-                    await message.channel.send("⚠️ 冷笑を検知し削除しました！")
+                    await message.channel.send("⚠️ 冷笑を検知し{message.author.display_name}のメッセージを削除しました！")
                     return 
                     
                 except discord.Forbidden:
