@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import time
+import re
 
 # 📯 挨拶機能のコグ
 class GreetingsCog(commands.Cog):
@@ -59,7 +60,7 @@ class GreetingsCog(commands.Cog):
 class ModerationCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # ❌ 反応させたいNGワード（削除対象）のリストkichi
+        # ❌ 反応させたいNGワード（削除対象）のリスト
         self.ng_words = [
             "おおw", "うおw", "oow", "uow", "おおｗ", "うおｗ", 
             "うお", "uo", "どわーｗ", "どわーw", "どわ-", "どわ-w", 
@@ -79,7 +80,6 @@ class ModerationCog(commands.Cog):
         if settings_cog:
             allowed_channels = settings_cog.settings["reishou"].get("channels", [])
             
-            # 💡 【ここを修正】
             # チャンネルが登録されている場合、現在のチャンネルが登録リストに「なければ」即座に処理を終了する
             if allowed_channels and (message.channel.id not in allowed_channels):
                 return
@@ -87,9 +87,12 @@ class ModerationCog(commands.Cog):
         # メッセージのテキストを小文字にして取得
         content = message.content.lower()
 
-        # リストの中のNGワードがメッセージに含まれているかチェック
+        # リストの中のNGワードをチェック
         for ng_word in self.ng_words:
-            if ng_word in content:
+            # 👈 前後に「行の先頭/末尾」または「空白文字（半角/全角スペース・改行）」がある場合のみマッチする正規表現
+            pattern = rf"(?:^|\s){re.escape(ng_word)}(?:$|\s)"
+            
+            if re.search(pattern, content):
                 try:
                     # 1️⃣ 検知したメッセージを削除する
                     await message.delete()
