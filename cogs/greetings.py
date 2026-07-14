@@ -82,7 +82,7 @@ class ModerationCog(commands.Cog):
                     await message.delete()
                     
                     # 2️⃣ 代わりのメッセージをチャンネルに送信する
-                    await message.channel.send("⚠️ 冷笑を検知し{message.author.display_name}のメッセージを削除しました！")
+                    await message.channel.send(f"⚠️ 冷笑を検知し{message.author.display_name}のメッセージを削除しました！")
                     return 
                     
                 except discord.Forbidden:
