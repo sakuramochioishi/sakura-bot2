@@ -12,106 +12,28 @@ class RolePanelView(discord.ui.View):
         # timeout=None にすることでBot再起動後もボタンが有効になります
         super().__init__(timeout=None)
 
-    # 永続化を有効にするため、custom_idを固定したボタンをデコレータで定義
-    # 引数として受け取るのではなく、ボタン自体をViewに固定するか、動的IDをパースする必要があります。
-    # ここでは一般的な「ボタン1」「ボタン2」の汎用実装の例として、カスタムIDを固定します。
-    # ※実際の運用ではロールIDをカスタムIDに埋め込むため、callback内でパースします。
-
-    @discord.ui.button(label="ロール1", style=discord.ButtonStyle.primary, custom_id="persistent_role_1")
+    # 永続化を有効にするため、custom_idを必ず固定します
+    @discord.ui.button(label="メンバーロール付与", style=discord.ButtonStyle.primary, custom_id="persistent_role_member")
     async def role_one_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # パネル作成時にBotの特定の設定等からロールIDを取得する設計が理想ですが、
-        # 簡易的に、ここではボタン名（または事前に保存されたID）から処理するロジックを想定
-        await interaction.response.send_message("⚠️ 永続ボタンのロール割り当てロジックをここに実装します。", ephemeral=True)
+        # 【実装例】特定のロールIDを付与/剥奪するトグル処理
+        # ※ 実際の運用時は 'YOUR_ROLE_ID_HERE' を付与したいロールID（数値）に書き換えてください
+        ROLE_ID = 123456789012345678  # 仮のID
 
+        guild = interaction.guild
+        role = guild.get_role(ROLE_ID)
 
-# --- 早押しクイズ用のView ---
-class QuizBuzzerView(discord.ui.View):
-    def __init__(self, bot, answer: str, start_time: float, embed: discord.Embed, quiz_timeout: float = 60.0, answer_timeout: float = 15.0):
-        # 💡 quiz_timeout（問題全体の制限時間）を外部から受け取れるように変更
-        super().__init__(timeout=quiz_timeout)
-        self.bot = bot
-        self.answer = answer.strip()
-        self.start_time = start_time
-        self.base_embed = embed
-        self.is_processing = False
-        self.wrong_users = set()
-        self.quiz_message = None
-        
-        # 💡 カスタム可能な時間制限を保持
-        self.answer_timeout = answer_timeout  # ボタンを押してからの回答時間（秒）
-
-    @discord.ui.button(label="押しボタン 🔴", style=discord.ButtonStyle.danger)
-    async def press_buzzer(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.is_processing:
-            await interaction.response.send_message("遅かった！すでに他の人がボタンを押しています。", ephemeral=True)
-            return
-        if interaction.user.id in self.wrong_users:
-            await interaction.response.send_message("❌ あなたはすでに解答権を失っています（お手付き）。", ephemeral=True)
+        if not role:
+            await interaction.response.send_message("⚠️ 設定されたロールが見つかりませんでした。管理者に連絡してください。", ephemeral=True)
             return
 
-        self.is_processing = True
-        button.disabled = True
-        button.style = discord.ButtonStyle.secondary
-        button.label = "考え中... 💬"
-        await interaction.response.edit_message(view=self)
+        member = interaction.user
+        if role in member.roles:
+            await member.remove_roles(role)
+            await interaction.response.send_message(f"✅ {role.mention} を外しました。", ephemeral=True)
+        else:
+            await member.add_roles(role)
+            await interaction.response.send_message(f"✅ {role.mention} を付与しました！", ephemeral=True)
 
-        elapsed_time = time.time() - self.start_time
-        announce_msg = await interaction.channel.send(
-            f"📢 **早押し成功！** （タイム: `{elapsed_time:.2f}秒` ⏱️）\n"
-            f"解答権： {interaction.user.mention} さん！\n🚨 **{int(self.answer_timeout)}秒以内**に答えを入力してください！"
-        )
-
-        def check_answer(msg):
-            return msg.author == interaction.user and msg.channel == interaction.channel
-
-        try:
-            # 💡 カスタムされた回答時間（self.answer_timeout）を使用
-            user_msg = await self.bot.wait_for('message', check=check_answer, timeout=self.answer_timeout)
-            if user_msg.content.strip().lower() == self.answer.lower():
-                await user_msg.reply(f"🎉 **正解！！**\n答えは「**{self.answer}**」でした！")
-                self.stop()
-                button.label = "正解が出ました 🎉"
-                button.style = discord.ButtonStyle.success
-                await self.quiz_message.edit(view=self)
-                return
-            else:
-                await user_msg.reply(f"❌ **不正解！** {interaction.user.mention} さんは解答権を失いました。")
-        except asyncio.TimeoutError:
-            await interaction.channel.send(f"⏰ タイムアップ！ {interaction.user.mention} さんは時間切れです。")
-
-        self.wrong_users.add(interaction.user.id)
-        self.is_processing = False
-        button.disabled = False
-        button.style = discord.ButtonStyle.danger
-        button.label = "押しボタン 🔴"
-        
-        # メンションのテキスト変換
-        lost_mentions = [f"<@{uid}>" for uid in self.wrong_users]
-        self.base_embed.set_footer(text=f"※解答権喪失: {', '.join(lost_mentions)}\nまだの人はボタンを押せます！")
-        await self.quiz_message.edit(embed=self.base_embed, view=self)
-        try:
-            await announce_msg.delete()
-        except discord.NotFound:
-            pass
-
-    async def on_timeout(self):
-        """⏰ 問題全体の制限時間が切れたときの処理"""
-        for item in self.children:
-            item.disabled = True
-            item.label = "時間切れ ⏰"
-            item.style = discord.ButtonStyle.secondary
-            
-        if self.quiz_message:
-            try:
-                # 元々のクイズのボタンを「時間切れ」に更新
-                await self.quiz_message.edit(view=self)
-                
-                # 💡 【新機能】元の問題メッセージ（self.quiz_message）にリプライする形で答えを表示！
-                await self.quiz_message.reply(
-                    f"⏰ **時間切れでクイズ終了です！**\n正解は「**{self.answer}**」でした！"
-                )
-            except discord.NotFound:
-                pass
 
 # --- ルーレット用のView ---
 class MemberRouletteView(discord.ui.View):
@@ -137,6 +59,16 @@ class CommandsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    # --- エラーハンドリング (テキストコマンド用) ---
+    @commands.Cog.listener()
+    async def on_command_error(self, ctx, error):
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("❌ このコマンドを実行する権限がありません。", delete_after=5)
+        elif isinstance(error, commands.NotOwner):
+            await ctx.send("❌ このコマンドはBot開発者のみ実行可能です。", delete_after=5)
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send("❌ 引数が不足しています。使用方法を確認してください。", delete_after=5)
+
     # --- スラッシュコマンド (一般向け) ---
 
     @app_commands.command(name="omikuji", description="今日のおみくじを引きます")
@@ -148,7 +80,6 @@ class CommandsCog(commands.Cog):
     @app_commands.command(name="timer", description="指定した分数後にメンションで通知します（最大180分）")
     @app_commands.describe(minutes="タイマーの分数 (1〜180分)")
     async def timer(self, interaction: discord.Interaction, minutes: int):
-        # 悪意ある長時間占有を防ぐバリデーション
         if minutes < 1 or minutes > 180:
             await interaction.response.send_message("❌ 1分から180分（3時間）の間で指定してください。", ephemeral=True)
             return
@@ -173,62 +104,28 @@ class CommandsCog(commands.Cog):
     @app_commands.command(name="koubun", description="ふたつの言葉からコウメ太夫のネタを生成します")
     @app_commands.describe(word1="〜かと思ったら", word2="〜でした")
     async def koubun(self, interaction: discord.Interaction, word1: str, word2: str):
-        # 文字数過多によるDiscord APIエラー防止
         if len(word1) > 500 or len(word2) > 500:
             await interaction.response.send_message("❌ 文字数が長すぎます（各500文字以内にしてね）。", ephemeral=True)
             return
         joke = f"チャンチャカチャンチャン チャチャンチャチャンチャン♪\n\n**{word1}** かと思ったら〜〜〜\n\n**{word2}** でした〜〜〜\n\n**チクショーー！！** 😭"
         await interaction.response.send_message(joke)
-    
-    @app_commands.command(name="quiz", description="早押しクイズを出題します（間違えたら他の人に回答権が回ります）")
-    @app_commands.describe(question="出題する問題文", answer="クイズの正解")
-    async def quiz(self, interaction: discord.Interaction, question: str, answer: str):
-        # 問題文の最後に @ユーザー名 を追加
-        formatted_question = f"{question} ({interaction.user.mention})"
 
-        embed = discord.Embed(
-            title="❓ 早押しクイズ出題！", 
-            description=f"【問題】\n**{formatted_question}**\n\n分かった人は下のボタンを素早くプッシュ！", 
-            color=discord.Color.gold()
-        )
-        embed.set_footer(text="🚨 間違えたり15秒答えないとお手付きになり、他の人が押せるようになります。")
-        
-        start_time = time.time()
-        view = QuizBuzzerView(self.bot, answer, start_time, embed)
-        
-        try:
-            # 1. チャンネル全体にクイズを投稿（Botからの新規投稿扱いにする）
-            quiz_msg = await interaction.channel.send(embed=embed, view=view)
-            view.quiz_message = quiz_msg
-            
-            # 2. コマンドを打った本人にだけ成功メッセージを返す（これで「〜さんが使用しました」が消えます）
-            await interaction.response.send_message("✅ クイズを正常に出題しました！", ephemeral=True)
-            
-        except Exception as e:
-            # 万が一、権限不足などで投稿できなかった場合
-            print(f"クイズ出題エラー: {e}")
-            await interaction.response.send_message("❌ クイズの出題に失敗しました。Botのメッセージ送信権限を確認してください。", ephemeral=True)
     # --- スラッシュコマンド (管理者限定) ---
 
     @app_commands.command(name="role_panel", description="【管理者用】ロール付与用のパネルを作成します")
     @app_commands.describe(title="パネルのタイトル", description="説明文")
-    @app_commands.default_permissions(administrator=True) # スラッシュコマンドの権限制限
+    @app_commands.default_permissions(administrator=True)
     async def create_role_panel(self, interaction: discord.Interaction, title: str, description: str):
-        # デコレータに加えてコード側でも二重チェック
-        if not interaction.permissions.administrator:
-            await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
-            return
-        
         embed = discord.Embed(title=title, description=description, color=discord.Color.green())
         view = RolePanelView() # 永続ビューの呼び出し
         await interaction.response.send_message("📢 ロールパネルを作成しました！", ephemeral=True)
         await interaction.channel.send(embed=embed, view=view)
 
 
-    # --- テキストコマンド (権限・セキュリティ強化版) ---
+    # --- テキストコマンド ---
 
     @commands.command(name="clear")
-    @commands.has_permissions(manage_messages=True) # メッセージ管理権限が必須
+    @commands.has_permissions(manage_messages=True)
     async def msg_clear(self, ctx, amount: int):
         if amount < 1 or amount > 100:
             await ctx.send("❌ 1から100の間の数値を指定してください。", delete_after=5)
@@ -237,20 +134,20 @@ class CommandsCog(commands.Cog):
         await ctx.send(f"🧹 正常に {len(deleted) - 1} 件のメッセージを削除しました！", delete_after=5)
 
     @commands.command(name="servers")
-    @commands.is_owner() # Botの開発者（オーナー）しか実行できない
+    @commands.is_owner()
     async def list_servers(self, ctx):
         guild_count = len(self.bot.guilds)
         server_list = ""
         for guild in self.bot.guilds:
             server_list += f"• **{guild.name}** (メンバー数: {guild.member_count}人, ID: `{guild.id}`)\n"
-            if len(server_list) > 1800: # 2000文字制限対策
+            if len(server_list) > 1800:
                 server_list += "• ...他多数"
                 break
         embed = discord.Embed(title="🤖 Bot所属サーバー一覧", description=f"現在 **{guild_count}** 個のサーバーに参加しています。\n\n{server_list}", color=discord.Color.blue())
         await ctx.send(embed=embed)
 
     @commands.command(name="say")
-    @commands.has_permissions(administrator=True) # 管理者のみ
+    @commands.has_permissions(administrator=True)
     async def say_message(self, ctx, channel: discord.TextChannel, *, message: str):
         try:
             await ctx.message.delete()
@@ -259,7 +156,7 @@ class CommandsCog(commands.Cog):
         await channel.send(message)
 
     @commands.command(name="status")
-    @commands.is_owner() # オーナーのみ
+    @commands.is_owner()
     async def change_status(self, ctx, *, text: str):
         await self.bot.change_presence(activity=discord.Game(name=text))
         await ctx.send(f"🤖 Botのステータスを「**{text} をプレイ中**」に変更しました！")
@@ -279,7 +176,7 @@ class CommandsCog(commands.Cog):
         await message.edit(content=None, embed=embed)
 
     @commands.command(name="restart")
-    @commands.is_owner() # オーナーのみがBotを停止可能
+    @commands.is_owner()
     async def restart_bot(self, ctx):
         await ctx.send("**再起動処理を実行中 (プロセスを終了します)**")
         await self.bot.close()

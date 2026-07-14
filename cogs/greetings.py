@@ -56,13 +56,16 @@ class GreetingsCog(commands.Cog):
                 self.last_greet_times[channel_id] = current_time
             return
 
-
-# 🛡️ モデレーション機能のコグ（独立させました）
 class ModerationCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         # ❌ 反応させたいNGワード（削除対象）のリストkichi
-        self.ng_words = ["おおw", "うおw", "oow", "uow", "おおｗ", "うおｗ", "うお", "uo", "どわーｗ", "どわーw", "どわ-", "どわ-w", "dowa-w", "dowa-", "dowaーw", "きちーｗ", "きちーw", "kichi-w", "kiti-w"]
+        self.ng_words = [
+            "おおw", "うおw", "oow", "uow", "おおｗ", "うおｗ", 
+            "うお", "uo", "どわーｗ", "どわーw", "どわ-", "どわ-w", 
+            "dowa-w", "dowa-", "dowaーw", "きちーｗ", "きちーw", 
+            "kichi-w", "kiti-w"
+        ]
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -70,6 +73,16 @@ class ModerationCog(commands.Cog):
         # Bot自身の発言には反応しない（無限ループ防止）
         if message.author.bot:
             return
+
+        # ⚙️ settings.py から冷笑削除の対象チャンネル設定を取得
+        settings_cog = self.bot.get_cog("SettingsCog")
+        if settings_cog:
+            allowed_channels = settings_cog.settings["reishou"].get("channels", [])
+            
+            # 💡 【ここを修正】
+            # チャンネルが登録されている場合、現在のチャンネルが登録リストに「なければ」即座に処理を終了する
+            if allowed_channels and (message.channel.id not in allowed_channels):
+                return
 
         # メッセージのテキストを小文字にして取得
         content = message.content.lower()
@@ -89,7 +102,6 @@ class ModerationCog(commands.Cog):
                     print("❌ 権限が足りないため、メッセージを削除できませんでした。")
                 except Exception as e:
                     print(f"❌ エラーが発生しました: {e}")
-
 
 # ⚙️ 両方のコグをBotに登録する
 async def setup(bot: commands.Bot):
