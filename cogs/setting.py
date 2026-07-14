@@ -49,7 +49,8 @@ class SettingsCog(commands.Cog):
     )
     @app_commands.choices(機能=[
         app_commands.Choice(name="クイズ設定 (quiz)", value="quiz"),
-        app_commands.Choice(name="冷笑削除設定 (reishou)", value="reishou")
+        app_commands.Choice(name="冷笑削除設定 (reishou)", value="reishou"),  # 👈 カンマを追加しました
+        app_commands.Choice(name="設定の確認 (status)", value="status") 
     ])
     @app_commands.default_permissions(administrator=True) # 管理者ロール持ちのみ実行可能
     async def setting(
@@ -106,7 +107,54 @@ class SettingsCog(commands.Cog):
                 )
             
             self.save_settings()
+        
+        elif 機能 == "status":
+            channels_list = self.settings["reishou"].get("channels", [])
+            
+            # 登録されているチャンネルIDをメンションテキスト（<#ID>）に変換
+            active_channels = []
+            # 👈 リストのコピー (list(channels_list)) を回すことで、安全に削除処理を行えるようにしました
+            for cid in list(channels_list):
+                # サーバー内にチャンネルが存在するか確認
+                channel = interaction.guild.get_channel(cid) if interaction.guild else None
+                if channel:
+                    active_channels.append(channel.mention)
+                else:
+                    # サーバーから消えたチャンネルは安全に削除
+                    if cid in self.settings["reishou"]["channels"]:
+                        self.settings["reishou"]["channels"].remove(cid)
+            
+            self.save_settings()
 
-# ファイルの最下部に記述します（SettingCogの部分は、ご自身で定義したCogのクラス名に合わせてください）
+            # 表示用テキストの用意
+            if active_channels:
+                channel_text = "\n".join(f"• {ch}" for ch in active_channels)
+            else:
+                channel_text = "❌ 対象チャンネルは登録されていません\n（※未登録の場合は、すべてのチャンネルが削除対象になります）"
+
+            # クイズ設定の取得
+            q_timeout_min = int(self.settings["quiz"].get("quiz_timeout", 900.0) / 60)
+            a_timeout_sec = int(self.settings["quiz"].get("answer_timeout", 15.0))
+
+            # Embedを作成（公開メッセージなので ephemeral=True は外して送信します）
+            embed = discord.Embed(
+                title="⚙️ Bot 現在の設定状況", 
+                color=discord.Color.blue()
+            )
+            embed.add_field(
+                name="🛡️ 冷笑削除：対象チャンネル", 
+                value=channel_text, 
+                inline=False
+            )
+            embed.add_field(
+                name="❓ 早押しクイズ設定", 
+                value=f"• 問題制限時間: `{q_timeout_min}分`\n• 回答制限時間: `{a_timeout_sec}秒`", 
+                inline=False
+            )
+            embed.set_footer(text="管理者のみ /setting から変更可能です")
+
+            # 💡 ephemeral=False で全員に見える埋め込みで送信！
+            await interaction.response.send_message(embed=embed)
+
 async def setup(bot: commands.Bot):
-    await bot.add_cog(SettingsCog(bot)) # もしクラス名が 'Setting' なら Setting(bot) にします
+    await bot.add_cog(SettingsCog(bot))
