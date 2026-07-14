@@ -61,8 +61,8 @@ class GreetingsCog(commands.Cog):
 class ModerationCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # ❌ 反応させたいNGワード（削除対象）のリスト
-        self.ng_words = ["おおw", "うおw", "oow", "uow", "おおｗ", "うおｗ", "うお", "uo"]
+        # ❌ 反応させたいNGワード（削除対象）のリストkichi
+        self.ng_words = ["おおw", "うおw", "oow", "uow", "おおｗ", "うおｗ", "うお", "uo", "どわーｗ", "どわーw", "どわ-", "どわ-w", "dowa-w", "dowa-", "dowaーw", "きちーｗ", "きちーw", "kichi-w", "kiti-w"]
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
