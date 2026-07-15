@@ -166,28 +166,41 @@ class MoneyLedger(commands.GroupCog, name="money"):
             await interaction.response.send_message(log_msg, ephemeral=True)
             await self._send_log(interaction.user, "PayPay支払", log_msg)
     
-    @app_commands.command(name="wallet", description="財布の残高を操作します (inは銀行から自動的に引かれます)")
+    @app_commands.command(name="wallet", description="財布の残高を操作します")
     @app_commands.choices(action=[    
         app_commands.Choice(name="in(お金を入れる)", value="in"),
-        app_commands.Choice(name="out(支払う)", value="out")
+        app_commands.Choice(name="out_pay(支払う)", value="out_pay"),
+        app_commands.Choice(name="out_paypay(PayPayにチャージする)", value="out_paypay")
     ])
     async def wallet(self, interaction: discord.Interaction, action: app_commands.Choice[str], amount: int, reason: str = "未入力"):
         if amount <= 0:
             await interaction.response.send_message("❌ 金額は1以上の数値を入力してください。", ephemeral=True)
             return
          
+        # パターン1: 銀行から財布にお金を入れる場合
         if action.value == "in":
             log_msg = f"🪙 財布に **{amount:,}円** 入れました。(銀行から引き出し)"
             self._update_balance(interaction.user.id, bank_diff=-amount, wallet_diff=amount, log_msg=log_msg)
             
             await interaction.response.send_message(f"🪙 財布に **{amount:,}円** お金を入れました。(🏦 銀行から自動出金されました)", ephemeral=True)
             await self._send_log(interaction.user, "財布へ入金", log_msg)
-        else:
+
+        # パターン2: 財布からお店等で支払う場合（通常のout）
+        elif action.value == "out_pay":
             log_msg = f"🪙 財布から **{amount:,}円** 支払いました。\n💬 理由: {reason}"
             self._update_balance(interaction.user.id, wallet_diff=-amount, log_msg=log_msg)
             
             await interaction.response.send_message(log_msg, ephemeral=True)
             await self._send_log(interaction.user, "財布から支払", log_msg)
 
+        # パターン3: 財布からPayPayへ直接チャージする場合（新規！）
+        elif action.value == "out_paypay":
+            log_msg = f"🪙👛 財布から 📱 PayPayへ **{amount:,}円** チャージしました。"
+            # 財布からマイナスして、PayPayにプラスする
+            self._update_balance(interaction.user.id, wallet_diff=-amount, paypay_diff=amount, log_msg=log_msg)
+            
+            await interaction.response.send_message(f"📱 PayPayに **{amount:,}円** チャージしました。(🪙 財布から自動出金されました)", ephemeral=True)
+            await self._send_log(interaction.user, "財布からPayPayチャージ", log_msg)
+            
 async def setup(bot: commands.Bot):
     await bot.add_cog(MoneyLedger(bot))
