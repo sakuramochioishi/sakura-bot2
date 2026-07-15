@@ -13,14 +13,9 @@ class SettingsCog(commands.GroupCog, name="setting"): # 👈 GroupCogにして /
         self.settings = self.load_settings()
 
     def load_settings(self):
-        if os.path.exists(SETTINGS_FILE):
-            try:
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"❌ 設定ファイルの読み込みに失敗しました: {e}")
-        
-        return {
+        """JSONファイルから設定を読み込む（超安全版）"""
+        # 初期設定データ
+        default_settings = {
             "quiz": {
                 "quiz_timeout": 900.0,
                 "answer_timeout": 25.0
@@ -29,6 +24,18 @@ class SettingsCog(commands.GroupCog, name="setting"): # 👈 GroupCogにして /
                 "channels": []
             }
         }
+
+        if os.path.exists(SETTINGS_FILE):
+            try:
+                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                # 📌 ここがポイント：JSONが壊れていようが文字コードがバグっていようが、
+                # 画面にログだけ残して、何事もなかったかのように初期データを返して起動を続行する
+                print(f"⚠️ 設定ファイルが壊れているため無視します: {e}")
+                return default_settings
+        
+        return default_settings
 
     def save_settings(self):
         try:
