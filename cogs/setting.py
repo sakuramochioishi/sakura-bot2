@@ -41,22 +41,30 @@ class SettingsCog(commands.Cog):
 
     # 🛠️ /setting コマンドの作成
     @app_commands.command(name="setting", description="Botの各種設定を変更します（管理者限定）")
+    @app_commands.choices(
+        機能=[
+            app_commands.Choice(name="クイズ設定 (quiz)", value="quiz"),
+            app_commands.Choice(name="冷笑削除設定 (reishou)", value="reishou"),
+            app_commands.Choice(name="設定の確認 (status)", value="status") 
+        ],
+        アクション=[
+            app_commands.Choice(name="対象に追加 (set)", value="set"),
+            app_commands.Choice(name="対象から削除 (unset)", value="unset")
+        ]
+    )
     @app_commands.describe(
         機能="設定を変更したい機能を選んでください",
+        アクション="【冷笑用】チャンネルを追加(set)するか削除(unset)するか選択します",
         制限時間="【クイズ用】問題全体の制限時間（分単位で入力、例: 30）",
         回答時間="【クイズ用】ボタンを押してからの回答時間（秒単位で入力、例: 20）",
-        チャンネル="【冷笑用】機能を適用したいチャンネル（未指定なら現在のチャンネル）"
+        チャンネル="【冷笑用】機能を適用・解除したいチャンネル（未指定なら現在のチャンネル）"
     )
-    @app_commands.choices(機能=[
-        app_commands.Choice(name="クイズ設定 (quiz)", value="quiz"),
-        app_commands.Choice(name="冷笑削除設定 (reishou)", value="reishou"),  # 👈 カンマを追加しました
-        app_commands.Choice(name="設定の確認 (status)", value="status") 
-    ])
     @app_commands.default_permissions(administrator=True) # 管理者ロール持ちのみ実行可能
     async def setting(
         self, 
         interaction: discord.Interaction, 
         機能: str, 
+        アクション: str = None,  # 👈 必須引数のすぐ後ろに配置
         制限時間: int = None, 
         回答時間: int = None, 
         チャンネル: discord.TextChannel = None
@@ -86,34 +94,52 @@ class SettingsCog(commands.Cog):
 
         # 🔵 冷笑の設定変更
         elif 機能 == "reishou":
+            # アクション（set / unset）が指定されていない場合はエラー
+            if アクション is None:
+                await interaction.response.send_message(
+                    "❌ 冷笑設定を変更する場合は「アクション（set または unset）」を選択してください。",
+                    ephemeral=True
+                )
+                return
+
             # チャンネルが選ばれなかった場合は、コマンドを実行したチャンネルを対象にする
             target_channel = チャンネル if チャンネル else interaction.channel
-            
             channels_list = self.settings["reishou"]["channels"]
             
-            if target_channel.id in channels_list:
-                # すでに登録済みなら解除（トグル式）
-                channels_list.remove(target_channel.id)
-                await interaction.response.send_message(
-                    f"✅ {target_channel.mention} を冷笑削除の**対象外**にしました。",
-                    ephemeral=True
-                )
-            else:
-                # 未登録なら新しく登録
-                channels_list.append(target_channel.id)
-                await interaction.response.send_message(
-                    f"✅ {target_channel.mention} を冷笑削除の**対象チャンネル**に設定しました！",
-                    ephemeral=True
-                )
-            
-            self.save_settings()
+            if アクション == "set":
+                if target_channel.id in channels_list:
+                    await interaction.response.send_message(
+                        f"ℹ️ {target_channel.mention} はすでに冷笑削除の対象に登録されています。",
+                        ephemeral=True
+                    )
+                else:
+                    channels_list.append(target_channel.id)
+                    self.save_settings()
+                    await interaction.response.send_message(
+                        f"✅ {target_channel.mention} を冷笑削除の**対象チャンネル**に設定しました！",
+                        ephemeral=True
+                    )
+
+            elif アクション == "unset":
+                if target_channel.id in channels_list:
+                    channels_list.remove(target_channel.id)
+                    self.save_settings()
+                    await interaction.response.send_message(
+                        f"✅ {target_channel.mention} を冷笑削除の**対象外**にしました。",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.response.send_message(
+                        f"ℹ️ {target_channel.mention} は冷笑削除の対象に登録されていません。",
+                        ephemeral=True
+                    )
         
+        # 🟡 設定の確認
         elif 機能 == "status":
             channels_list = self.settings["reishou"].get("channels", [])
             
             # 登録されているチャンネルIDをメンションテキスト（<#ID>）に変換
             active_channels = []
-            # 👈 リストのコピー (list(channels_list)) を回すことで、安全に削除処理を行えるようにしました
             for cid in list(channels_list):
                 # サーバー内にチャンネルが存在するか確認
                 channel = interaction.guild.get_channel(cid) if interaction.guild else None
@@ -136,7 +162,7 @@ class SettingsCog(commands.Cog):
             q_timeout_min = int(self.settings["quiz"].get("quiz_timeout", 900.0) / 60)
             a_timeout_sec = int(self.settings["quiz"].get("answer_timeout", 15.0))
 
-            # Embedを作成（公開メッセージなので ephemeral=True は外して送信します）
+            # Embedを作成
             embed = discord.Embed(
                 title="⚙️ Bot 現在の設定状況", 
                 color=discord.Color.blue()
@@ -153,7 +179,7 @@ class SettingsCog(commands.Cog):
             )
             embed.set_footer(text="管理者のみ /setting から変更可能です")
 
-            # 💡 ephemeral=False で全員に見える埋め込みで送信！
+            # 全員に見える埋め込みで送信
             await interaction.response.send_message(embed=embed)
 
 async def setup(bot: commands.Bot):
