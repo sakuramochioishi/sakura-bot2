@@ -109,13 +109,11 @@ class QuizCog(commands.Cog):
             # ⚙️ settings.py の SettingsCog から設定を取得する
             settings_cog = self.bot.get_cog("SettingsCog")
             if settings_cog:
-                # 設定ファイルから秒数を取得（登録されていない場合はデフォルト値を使用）
-                quiz_timeout = settings_cog.settings["quiz"].get("quiz_timeout", 900.0) # デフォルト15分（900秒）
-                answer_timeout = settings_cog.settings["quiz"].get("answer_timeout", 15.0) # デフォルト15秒
+                quiz_timeout = settings_cog.settings["quiz"].get("quiz_timeout", 900.0) 
+                answer_timeout = settings_cog.settings["quiz"].get("answer_timeout", 15.0) 
             else:
-                # SettingsCogが見つからない場合の安全な初期値（フォールバック値）
-                quiz_timeout = 900.0   # 15分
-                answer_timeout = 15.0  # 15秒
+                quiz_timeout = 900.0   
+                answer_timeout = 15.0  
 
             # 💡 取得した設定値をViewに渡して作成
             view = QuizBuzzerView(
@@ -123,15 +121,17 @@ class QuizCog(commands.Cog):
                 answer=答え,
                 start_time=time.time(),
                 embed=embed,
-                quiz_timeout=quiz_timeout,     # 設定された問題全体の時間
-                answer_timeout=answer_timeout   # 設定されたボタン押下後の回答時間
+                quiz_timeout=quiz_timeout,     
+                answer_timeout=answer_timeout   
             )
 
-            # 1️⃣ まず、返信として問題（Embed）とボタンを送信する
-            await interaction.response.send_message(embed=embed, view=view)
+            # 1️⃣ 出題者には隠しメッセージ（ephemeral）で送信完了を伝える
+            await interaction.response.send_message("📢 クイズを出題しました！", ephemeral=True)
             
-            # 2️⃣ 送信したメッセージオブジェクトを取得してViewに記憶させる
-            quiz_message = await interaction.original_response()
+            # 2️⃣ チャンネルに直接、通常メッセージとして問題（Embed）とボタンを送信する
+            quiz_message = await interaction.channel.send(embed=embed, view=view)
+            
+            # 3️⃣ 送信したメッセージオブジェクトをViewに記憶させる
             view.quiz_message = quiz_message
 
         except Exception as e:

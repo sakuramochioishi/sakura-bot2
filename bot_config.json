@@ -1,0 +1,11 @@
+{
+    "quiz": {
+        "quiz_timeout": 900.0,
+        "answer_timeout": 15.0
+    },
+    "reishou": {
+        "channels": [
+            1525011916806684723
+        ]
+    }
+}
