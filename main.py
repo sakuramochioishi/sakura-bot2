@@ -75,7 +75,17 @@ async def on_command_error(ctx, error):
 
 # --- 起動処理 ---
 if TOKEN:
-    bot.run(TOKEN)
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        # ❌ 起動時に何らかのエラーで落ちた場合、内容を書き出す
+        import traceback
+        with open("error_log.txt", "w", encoding="utf-8") as f:
+            f.write("⚠️ 起動エラーが発生しました:\n")
+            f.write(traceback.format_exc())
+        raise e
 else:
+    # ❌ そもそも .env のトークンが読み込めていない場合
+    with open("error_log.txt", "w", encoding="utf-8") as f:
+        f.write("❌ エラー: .env ファイルから 'token' を読み込めませんでした。ファイルが存在しないか、中身が空の可能性があります。")
     print("エラー: .env から 'token' が読み込めませんでした。")
-   
