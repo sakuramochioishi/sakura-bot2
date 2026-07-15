@@ -4,7 +4,7 @@ from discord.ext import commands
 import json
 import os
 
-SETTINGS_FILE = "bot_settings.json"
+SETTINGS_FILE = "bot_config.json"
 
 class SettingsCog(commands.GroupCog, name="setting"): # 👈 GroupCogにして /setting コマンド群にする
     def __init__(self, bot: commands.Bot):
