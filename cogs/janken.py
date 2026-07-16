@@ -127,7 +127,7 @@ class JankenCog(commands.Cog):
 
             embed = discord.Embed(
                 title="⚔️ じゃんけん勝負勃発！",
-                description=f"{challenger.mention} **vs** {opponent.mention}\n下のボタンを押して手を選んでください！",
+                description=f"{challenger.mention} **vs** {opponent.mention}\n下のボタンを押して手を選んでください!",
                 color=discord.Color.blurple()
             )
             
