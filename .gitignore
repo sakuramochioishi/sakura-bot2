@@ -181,3 +181,5 @@ cython_debug/
 .cursorindexingignore
 
 bot_settings.db
+
+bot_settings.json
