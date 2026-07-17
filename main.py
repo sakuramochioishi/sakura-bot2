@@ -1,13 +1,13 @@
 import os
+import datetime  # 💡 時間を記録するために追加
 import discord
+from discord import app_commands # 💡 エラーの型指定のために追加
 from discord.ext import commands
 from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv("token")
 
-# 開発時は Intents.all() で問題ありませんが、
-# 本番運用時は必要なインテント（特に Members, Message Content など）だけ絞るのがセキュリティ上推奨されます
 intents = discord.Intents.all()
 
 class MyBot(commands.Bot):
@@ -29,6 +29,28 @@ class MyBot(commands.Bot):
                         print(f"✅ {cog_name} を読み込みました")
                     except Exception as e:
                         print(f"❌ {cog_name} の読み込みに失敗しました: {e}")
+
+    # 💡 追記：すべてのインタラクション（スラッシュコマンド等）を検知するリスナー
+    async def on_interaction(self, interaction: discord.Interaction):
+        if interaction.type == discord.InteractionType.application_command:
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            user = interaction.user
+            command_name = interaction.command.name if interaction.command else "Unknown"
+            guild = interaction.guild.name if interaction.guild else "DM"
+            
+            print(f"[{now}] [COMMAND] {user} (ID: {user.id}) ran /{command_name} in Server: {guild}")
+
+    # 💡 追記：スラッシュコマンドでエラーが出た時のハンドラの中身
+    async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        user = interaction.user
+        command_name = interaction.command.name if interaction.command else "Unknown"
+        
+        print(f"[{now}] [ERROR] {user} (ID: {user.id}) failed to run /{command_name}: {error}")
+        
+        # ユーザーにもエラーを通知（すでに返答済みの場合はスキップ）
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ コマンドの実行中にエラーが発生しました。", ephemeral=True)
 
         # 🚨 起動時の自動 tree.sync() はレートリミット（API制限）回避のため削除しました。
         # 代わりに下の管理用コマンド（!skr_sync）で手動同期します。
