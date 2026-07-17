@@ -30,6 +30,13 @@ class MyBot(commands.Bot):
                     except Exception as e:
                         print(f"❌ {cog_name} の読み込みに失敗しました: {e}")
 
+        try:
+            print("🔄 スラッシュコマンドを同期中...")
+            synced = await self.tree.sync()
+            print(f"✨ {len(synced)} 個のスラッシュコマンドを同期しました！")
+        except Exception as e:
+            print(f"❌ コマンドの同期に失敗しました: {e}")
+
     # 💡 追記：すべてのインタラクション（スラッシュコマンド等）を検知するリスナー
     async def on_interaction(self, interaction: discord.Interaction):
         if interaction.type == discord.InteractionType.application_command:
