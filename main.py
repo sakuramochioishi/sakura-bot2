@@ -1,9 +1,10 @@
 import os
-import datetime  # 💡 時間を記録するために追加
+import datetime
 import discord
-from discord import app_commands # 💡 エラーの型指定のために追加
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+import traceback
 
 load_dotenv()
 TOKEN = os.getenv("token")
@@ -16,7 +17,8 @@ class MyBot(commands.Bot):
         self.remove_command("help")
 
     async def setup_hook(self):
-        self.tree.on_error = self.on_tree_error  # スラッシュコマンドのエラーハンドラ
+        # スラッシュコマンドのエラーハンドラを設定
+        self.tree.on_error = self.on_tree_error
         
         # Cogの自動読み込み
         cogs_dir = "./cogs"
@@ -30,14 +32,10 @@ class MyBot(commands.Bot):
                     except Exception as e:
                         print(f"❌ {cog_name} の読み込みに失敗しました: {e}")
 
-        try:
-            print("🔄 スラッシュコマンドを同期中...")
-            synced = await self.tree.sync()
-            print(f"✨ {len(synced)} 個のスラッシュコマンドを同期しました！")
-        except Exception as e:
-            print(f"❌ コマンドの同期に失敗しました: {e}")
+        # 💡 起動時の自動 tree.sync() はレートリミット回避のため、完全にここから削除しました！
+        # 代わりに下の管理用コマンド（!skr_sync）で手動同期します。
 
-    # 💡 追記：すべてのインタラクション（スラッシュコマンド等）を検知するリスナー
+    # 💡 すべてのインタラクション（スラッシュコマンド等）を検知するリスナー
     async def on_interaction(self, interaction: discord.Interaction):
         if interaction.type == discord.InteractionType.application_command:
             now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -47,7 +45,14 @@ class MyBot(commands.Bot):
             
             print(f"[{now}] [COMMAND] {user} (ID: {user.id}) ran /{command_name} in Server: {guild}")
 
-    # 💡 追記：スラッシュコマンドでエラーが出た時のハンドラの中身
+    # 💡 【重要】テキストコマンド（!skr_）を正常に受け付けるための必須処理！
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+        # これを呼び出すことで、クラス外で定義した @bot.command が正常に動くようになります
+        await self.process_commands(message)
+
+    # 💡 スラッシュコマンドでエラーが出た時のハンドラ（1つに綺麗に統合しました）
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         user = interaction.user
@@ -57,26 +62,12 @@ class MyBot(commands.Bot):
         
         # ユーザーにもエラーを通知（すでに返答済みの場合はスキップ）
         if not interaction.response.is_done():
-            await interaction.response.send_message("❌ コマンドの実行中にエラーが発生しました。", ephemeral=True)
-
-        # 🚨 起動時の自動 tree.sync() はレートリミット（API制限）回避のため削除しました。
-        # 代わりに下の管理用コマンド（!skr_sync）で手動同期します。
+            await interaction.response.send_message("❌ コマンドの実行中にエラーが発生したか、権限が足りません。", ephemeral=True)
 
     async def on_ready(self):
         """Botがログインしたときに動く処理"""
         print(f"Logged in as {self.user.name} ({self.user.id})")
         print("--------------------------------------------")
-
-    async def on_tree_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-        """スラッシュコマンドでエラーが出た場合の共通受け皿"""
-        print(f"⚠️ スラッシュコマンドエラー発生: {error}")
-        
-        # ユーザーへのエラー通知（親切設計）
-        if not interaction.response.is_done():
-            await interaction.response.send_message(
-                "❌ コマンドの実行中にエラーが発生したか、権限が足りません。", 
-                ephemeral=True
-            )
 
 bot = MyBot()
 
@@ -108,7 +99,6 @@ if TOKEN:
         bot.run(TOKEN)
     except Exception as e:
         # ❌ 起動時に何らかのエラーで落ちた場合、内容を書き出す
-        import traceback
         with open("error_log.txt", "w", encoding="utf-8") as f:
             f.write("⚠️ 起動エラーが発生しました:\n")
             f.write(traceback.format_exc())
