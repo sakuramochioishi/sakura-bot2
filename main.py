@@ -32,8 +32,12 @@ class MyBot(commands.Bot):
                     except Exception as e:
                         print(f"❌ {cog_name} の読み込みに失敗しました: {e}")
 
-        # 💡 起動時の自動 tree.sync() はレートリミット回避のため、完全にここから削除しました！
-        # 代わりに下の管理用コマンド（!skr_sync）で手動同期します。
+        # 💡 【重要】再起動後もロールパネルのボタンを反応させるための設定
+        # もし role_panel が入っているCog名が「RolePanelCog」であれば以下のように呼び出します
+        role_cog = self.get_cog("RolePanelCog")
+        if role_cog and hasattr(role_cog, "role_view"):
+            # Cog側に用意した永続View（RolePanelViewなど）をBot本体に再登録します
+            self.add_view(role_cog.role_view)
 
     # 💡 すべてのインタラクション（スラッシュコマンド等）を検知するリスナー
     async def on_interaction(self, interaction: discord.Interaction):
