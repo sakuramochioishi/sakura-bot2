@@ -5,149 +5,34 @@ import random
 import asyncio
 import time
 import sys
-import json
-import os
-from typing import List, Tuple, Optional
 
-# 設定を保存するJSONファイルのパス
-CONFIG_FILE = "role_panels.json"
-
-def load_panels() -> dict:
-    if not os.path.exists(CONFIG_FILE):
-        return {}
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"設定の読み込み中にエラーが発生しました: {e}")
-        return {}
-
-def save_panel(channel_id: int, message_id: int, role_settings: List[dict]):
-    panels = load_panels()
-    panels[str(message_id)] = {
-        "channel_id": channel_id,
-        "roles": role_settings  # [{"id": 123, "name": "ロール名"}, ...] の形式で保存
-    }
-    try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(panels, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"設定の保存中にエラーが発生しました: {e}")
-
+# --- ロールパネル用のView（永続化対応） ---
 class RolePanelView(discord.ui.View):
-    def __init__(self, role_settings: List[dict]):
-        super().__init__(timeout=None)
-        
-        for index, role_info in enumerate(role_settings):
-            if index >= 6:
-                break
-                
-            role_id = role_info["id"]
-            role_name = role_info["name"]
-            
-            # 永続化（再起動対策）のため、custom_id に一意のロールIDを含めます
-            custom_id = f"persistent_role_toggle:{role_id}"
-            
-            # ロール名をそのままボタンのラベル（表示名）にします
-            button = discord.ui.Button(
-                label=role_name, 
-                style=discord.ButtonStyle.primary, 
-                custom_id=custom_id
-            )
-            button.callback = self.make_callback(role_id)
-            self.add_item(button)
-
-    def make_callback(self, role_id: int):
-        async def callback(interaction: discord.Interaction):
-            guild = interaction.guild
-            if not guild: return
-            
-            role = guild.get_role(role_id)
-            if not role:
-                await interaction.response.send_message("⚠️ 設定されたロールが見つかりませんでした。", ephemeral=True)
-                return
-                
-            member = interaction.user
-            if role in member.roles:
-                await member.remove_roles(role)
-                await interaction.response.send_message(f"✅ {role.mention} を外しました。", ephemeral=True)
-            else:
-                await member.add_roles(role)
-                await interaction.response.send_message(f"✅ {role.mention} を付与しました！", ephemeral=True)
-        return callback
-
-class RoleBot(commands.Bot):
     def __init__(self):
-        intents = discord.Intents.default()
-        intents.members = True  # ロール操作に必須
-        super().__init__(command_prefix="!", intents=intents)
+        # timeout=None にすることでBot再起動後もボタンが有効になります
+        super().__init__(timeout=None)
 
-    async def setup_hook(self):
-        # 過去のView（ボタン）の復活処理
-        panels = load_panels()
-        print(f"【永続化】{len(panels)}件のロールパネル設定を読み込んでいます...")
-        for message_id, data in panels.items():
-            self.add_view(RolePanelView(data["roles"]))
+    # 永続化を有効にするため、custom_idを必ず固定します
+    @discord.ui.button(label="メンバーロール付与", style=discord.ButtonStyle.primary, custom_id="persistent_role_member")
+    async def role_one_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 【実装例】特定のロールIDを付与/剥奪するトグル処理
+        # ※ 実際の運用時は 'YOUR_ROLE_ID_HERE' を付与したいロールID（数値）に書き換えてください
+        ROLE_ID = 123456789012345678  # 仮のID
 
-bot = RoleBot()
+        guild = interaction.guild
+        role = guild.get_role(ROLE_ID)
 
-@bot.event
-async def on_ready():
-    print(f"ログイン完了: {bot.user.name}")
-    try:
-        # スラッシュコマンドを強制同期
-        synced = await bot.tree.sync()
-        print(f"【同期完了】{len(synced)} 個のスラッシュコマンドを同期しました！")
-    except Exception as e:
-        print(f"コマンドの同期中にエラーが発生しました: {e}")
+        if not role:
+            await interaction.response.send_message("⚠️ 設定されたロールが見つかりませんでした。管理者に連絡してください。", ephemeral=True)
+            return
 
-# コマンド名を「/role_panel」に変更
-@bot.tree.command(name="role_panel", description="カスタムロール付与パネルを設置します（最大6個）")
-@app_commands.describe(
-    role1="1つ目のロール",
-    role2="2つ目のロール（任意）",
-    role3="3つ目のロール（任意）",
-    role4="4つ目のロール（任意）",
-    role5="5つ目のロール（任意）",
-    role6="6つ目のロール（任意）",
-)
-async def role_panel(
-    interaction: discord.Interaction,
-    role1: discord.Role,
-    role2: Optional[discord.Role] = None,
-    role3: Optional[discord.Role] = None,
-    role4: Optional[discord.Role] = None,
-    role5: Optional[discord.Role] = None,
-    role6: Optional[discord.Role] = None,
-):
-    # 権限チェック
-    if not interaction.user.guild_permissions.manage_roles:
-        await interaction.response.send_message("❌ このコマンドを実行するには「ロールの管理」権限が必要です。", ephemeral=True)
-        return
-
-    raw_roles = [role1, role2, role3, role4, role5, role6]
-    role_settings: List[dict] = []
-    
-    # 選択されたロールから、IDと名前を抽出してリスト化
-    for r in raw_roles:
-        if r is not None:
-            role_settings.append({"id": r.id, "name": r.name})
-
-    # 一度応答を保留
-    await interaction.response.defer(ephemeral=True)
-    
-    channel = interaction.channel
-    if not channel:
-        await interaction.followup.send("❌ チャンネルの取得に失敗しました。", ephemeral=True)
-        return
-
-    # パネルを送信（Viewを適用）
-    view = RolePanelView(role_settings)
-    panel_message = await channel.send(content="以下のボタンを押すと、対応するロールを付け外しできます！", view=view)
-
-    # JSONファイルに保存
-    save_panel(channel_id=channel.id, message_id=panel_message.id, role_settings=role_settings)
-    await interaction.followup.send(f"✅ ロールパネルを設置し、設定を `{CONFIG_FILE}` に保存しました！", ephemeral=True)
+        member = interaction.user
+        if role in member.roles:
+            await member.remove_roles(role)
+            await interaction.response.send_message(f"✅ {role.mention} を外しました。", ephemeral=True)
+        else:
+            await member.add_roles(role)
+            await interaction.response.send_message(f"✅ {role.mention} を付与しました！", ephemeral=True)
 
 
 # --- ルーレット用のView ---
