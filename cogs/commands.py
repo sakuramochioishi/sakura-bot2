@@ -6,35 +6,6 @@ import asyncio
 import time
 import sys
 
-# --- ロールパネル用のView（永続化対応） ---
-class RolePanelView(discord.ui.View):
-    def __init__(self):
-        # timeout=None にすることでBot再起動後もボタンが有効になります
-        super().__init__(timeout=None)
-
-    # 永続化を有効にするため、custom_idを必ず固定します
-    @discord.ui.button(label="メンバーロール付与", style=discord.ButtonStyle.primary, custom_id="persistent_role_member")
-    async def role_one_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 【実装例】特定のロールIDを付与/剥奪するトグル処理
-        # ※ 実際の運用時は 'YOUR_ROLE_ID_HERE' を付与したいロールID（数値）に書き換えてください
-        ROLE_ID = 123456789012345678  # 仮のID
-
-        guild = interaction.guild
-        role = guild.get_role(ROLE_ID)
-
-        if not role:
-            await interaction.response.send_message("⚠️ 設定されたロールが見つかりませんでした。管理者に連絡してください。", ephemeral=True)
-            return
-
-        member = interaction.user
-        if role in member.roles:
-            await member.remove_roles(role)
-            await interaction.response.send_message(f"✅ {role.mention} を外しました。", ephemeral=True)
-        else:
-            await member.add_roles(role)
-            await interaction.response.send_message(f"✅ {role.mention} を付与しました！", ephemeral=True)
-
-
 # --- ルーレット用のView ---
 class MemberRouletteView(discord.ui.View):
     def __init__(self, target_members):
@@ -110,18 +81,6 @@ class CommandsCog(commands.Cog):
         joke = f"チャンチャカチャンチャン チャチャンチャチャンチャン♪\n\n**{word1}** かと思ったら〜〜〜\n\n**{word2}** でした〜〜〜\n\n**チクショーー！！** 😭"
         await interaction.response.send_message(joke)
 
-    # --- スラッシュコマンド (管理者限定) ---
-
-    @app_commands.command(name="role_panel", description="【管理者用】ロール付与用のパネルを作成します")
-    @app_commands.describe(title="パネルのタイトル", description="説明文")
-    @app_commands.default_permissions(administrator=True)
-    async def create_role_panel(self, interaction: discord.Interaction, title: str, description: str):
-        embed = discord.Embed(title=title, description=description, color=discord.Color.green())
-        view = RolePanelView() # 永続ビューの呼び出し
-        await interaction.response.send_message("📢 ロールパネルを作成しました！", ephemeral=True)
-        await interaction.channel.send(embed=embed, view=view)
-
-
     # --- テキストコマンド ---
 
     @commands.command(name="clear")
@@ -183,8 +142,6 @@ class CommandsCog(commands.Cog):
         sys.exit(0)
 
 
-# ⚙️ スラッシュコマンドと永続Viewのセットアップ
+# ⚙️ セットアップ
 async def setup(bot: commands.Bot):
-    # ロールパネルのViewを永続化（再起動後も動作させる）
-    bot.add_view(RolePanelView())
     await bot.add_cog(CommandsCog(bot))
