@@ -101,7 +101,7 @@ class QuizCog(commands.Cog):
             # 🟢 Embed（問題カード）の作成
             embed = discord.Embed(
                 title="❓ 早押しクイズ！",
-                description=f"**問題：**\n{問題}",
+                description=f"**問題：**\n{問題}({interaction.user.mention})",
                 color=discord.Color.blurple()
             )
             embed.set_footer(text="下の赤いボタンを押して解答権を獲得してください！")
