@@ -9,8 +9,9 @@ from discord.ext import commands
 # ----------------------------------------------------
 # 設定・定数
 # ----------------------------------------------------
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "YOUR_NEON_DATABASE_URL_HERE"
+# DATABASE_URL2 から接続文字列を取得します
+DATABASE_URL2 = os.getenv(
+    "DATABASE_URL2", "YOUR_NEON_DATABASE_URL_HERE"
 )
 
 HANDS = {"rock": "✊", "scissors": "✌️", "paper": "🖐️"}
@@ -26,7 +27,7 @@ async def record_result(user_id: int, result: str):
     if user_id is None:
         return
 
-    conn = await asyncpg.connect(DATABASE_URL)
+    conn = await asyncpg.connect(DATABASE_URL2)
     try:
         if result == "win":
             query = """
@@ -59,7 +60,7 @@ async def get_top_rankings(limit: int = 10):
     合計得点（勝ち3点, 引き分け2点, 負け1点）でソートしてランキングを取得する。
     同点の場合は勝利数が多い順にソート。
     """
-    conn = await asyncpg.connect(DATABASE_URL)
+    conn = await asyncpg.connect(DATABASE_URL2)
     try:
         query = """
             SELECT 
@@ -76,7 +77,6 @@ async def get_top_rankings(limit: int = 10):
         return rows
     finally:
         await conn.close()
-
 
 # ----------------------------------------------------
 # じゃんけん View
