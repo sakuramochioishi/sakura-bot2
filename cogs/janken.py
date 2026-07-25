@@ -142,7 +142,7 @@ class JankenView(discord.ui.View):
                 embed.description = (
                     "🤔 **あいこでしょ！**\n\n"
                     "引き分けです！\n"
-                    "続ける場合はもう一度 `/janken` を実行してください。"
+                    "続ける場合はもう一度 /janken:1525005326770769962 を実行してください。"
                 )
 
                 for item in self.children:
