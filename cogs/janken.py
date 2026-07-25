@@ -193,6 +193,8 @@ class JankenView(discord.ui.View):
                 embed.color = discord.Color.orange()
                 embed.description = (
                     "🤔 **あいこでしょ！**\n\n引き分けです！"
+                    "続ける場合はもう一度 </janken play:1530579083002384636> を実行してください。"
+
                 )
 
                 # DBに引き分けを記録
