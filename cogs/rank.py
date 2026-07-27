@@ -26,9 +26,24 @@ class Leveling(commands.Cog):
         self.db_pool = None
 
     async def cog_load(self):
-        """Cogロード時にNeonへ接続"""
+        """Cogロード時にDB接続 & テーブル自動作成"""
         db_url = os.getenv("DATABASE_URL")
         self.db_pool = await asyncpg.create_pool(db_url)
+
+        # 🟢 テーブルが存在しなければ自動作成するSQLを実行
+        async with self.db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_levels (
+                    guild_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    xp INT DEFAULT 0,
+                    level INT DEFAULT 1,
+                    last_message_at TIMESTAMP WITH TIME ZONE,
+                    PRIMARY KEY (guild_id, user_id)
+                );
+            """
+            )
 
     async def cog_unload(self):
         """Cogアンロード時に接続切断"""
