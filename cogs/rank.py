@@ -199,7 +199,7 @@ class Leveling(commands.Cog):
             # 10秒のクールダウンチェック
             if row and row["last_message_at"]:
                 delta = (now - row["last_message_at"]).total_seconds()
-                if delta < 10:
+                if delta < 30:
                     return
 
             current_xp = row["xp"] if row else 0
