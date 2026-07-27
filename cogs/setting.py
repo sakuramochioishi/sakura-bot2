@@ -153,7 +153,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
         return {
             "quiz_timeout": float(row[0]),
             "answer_timeout": float(row[1]),
-            "channels": [int(cid) for cid in row[2]],
+            "channels": [int(cid) for cid in row[2]] if row[2] else [],
             "level_channel_id": int(row[3]) if row[3] else None,
             "rank_channel_id": int(row[4]) if row[4] else None,
         }
@@ -170,8 +170,8 @@ class SettingsCog(commands.GroupCog, name="setting"):
         """指定されたギルドの設定を上書き保存する"""
         guild_id_str = str(guild_id)
         channels_str_list = [str(cid) for cid in channels]
-        l_ch_str = str(level_channel_id) if level_channel_id else None
-        r_ch_str = str(rank_channel_id) if rank_channel_id else None
+        l_ch_str = str(level_channel_id) if level_channel_id is not None else None
+        r_ch_str = str(rank_channel_id) if rank_channel_id is not None else None
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
@@ -308,7 +308,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
         await interaction.response.send_message(embed=embed)
 
     # ==========================================
-    # 2. /setting notification コマンド（新規追加）
+    # 2. /setting notification コマンド
     # ==========================================
     @app_commands.command(
         name="notification",
@@ -366,6 +366,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
                 name="👑 ランクアップ通知", value=msg, inline=False
             )
 
+        # 修正ポイント: 更新後の current_settings を使ってDB保存する
         self._save_guild_settings(
             interaction.guild_id,
             current_settings["quiz_timeout"],

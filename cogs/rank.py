@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 import os
 import random
 import asyncpg
@@ -6,16 +7,18 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+logger = logging.getLogger(__name__)
+
 # 冒険者ランクの設定 (必要レベル : (ロール名, ロールカラー))
 ADVENTURER_RANKS = {
     100: ("👑 Legend（伝説の勇者）", discord.Color.from_rgb(255, 215, 0)),  # 黄金
-    70: ("🛡️ Adamantite（金剛級）", discord.Color.from_rgb(112, 128, 144)), # アダマンタイト・スレート
-    50: ("🔮 Mythril（神銀級）", discord.Color.from_rgb(138, 43, 226)),     # ミスリル・バイオレット
-    35: ("⚜️ Platinum（白金級）", discord.Color.from_rgb(229, 228, 226)),   # プラチナ
-    20: ("🥇 Gold（黄金級）", discord.Color.gold()),                        # ゴールド
-    10: ("⚔️ Silver（白銀級）", discord.Color.light_grey()),                 # シルバー
-    5:  ("🗡️ Bronze（青銅級）", discord.Color.dark_orange()),               # ブロンズ
-    1:  ("🔰 Novice（駆け出し）", discord.Color.green()),                    # グリーン
+    70: ("🛡️ Adamantite（金剛級）", discord.Color.from_rgb(112, 128, 144)),  # アダマンタイト
+    50: ("🔮 Mythril（神銀級）", discord.Color.from_rgb(138, 43, 226)),  # ミスリル
+    35: ("⚜️ Platinum（白金級）", discord.Color.from_rgb(229, 228, 226)),  # プラチナ
+    20: ("🥇 Gold（黄金級）", discord.Color.gold()),  # ゴールド
+    10: ("⚔️ Silver（白銀級）", discord.Color.light_grey()),  # シルバー
+    5: ("🗡️ Bronze（青銅級）", discord.Color.dark_orange()),  # ブロンズ
+    1: ("🔰 Novice（駆け出し）", discord.Color.green()),  # グリーン
 }
 
 
@@ -23,14 +26,18 @@ class Leveling(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.db_pool = None
+        self.db_pool: asyncpg.Pool | None = None
 
     async def cog_load(self):
         """Cogロード時にDB接続 & テーブル自動作成"""
         db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            raise ValueError(
+                "環境変数 'DATABASE_URL' が設定されていません。"
+            )
+
         self.db_pool = await asyncpg.create_pool(db_url)
 
-        # 🟢 テーブルが存在しなければ自動作成するSQLを実行
         async with self.db_pool.acquire() as conn:
             await conn.execute(
                 """
@@ -46,7 +53,7 @@ class Leveling(commands.Cog):
             )
 
     async def cog_unload(self):
-        """Cogアンロード時に接続切断"""
+        """Cogアンロード時にDB接続を切断"""
         if self.db_pool:
             await self.db_pool.close()
 
@@ -60,10 +67,34 @@ class Leveling(commands.Cog):
                 return rank_name, color
         return "🔰 Novice（駆け出し）", discord.Color.green()
 
+    def get_notification_channel(
+        self, guild: discord.Guild, origin_channel: discord.TextChannel, kind: str
+    ) -> discord.TextChannel:
+        """setting Cogから指定された通知先チャンネルを取得し、未設定・取得不可の場合は元のチャンネルを返す"""
+        settings_cog = self.bot.get_cog("setting")
+        if not settings_cog:
+            return origin_channel
+
+        target_channel_id = None
+        if kind == "level":
+            target_channel_id = settings_cog.get_level_channel_id(guild.id)
+        elif kind == "rank":
+            target_channel_id = settings_cog.get_rank_channel_id(guild.id)
+
+        if target_channel_id:
+            target_channel = guild.get_channel(target_channel_id)
+            if target_channel and target_channel.permissions_for(guild.me).send_messages:
+                return target_channel
+
+        return origin_channel
+
     async def ensure_roles(
         self, guild: discord.Guild
     ) -> tuple[list[str], list[str]]:
         """サーバー内に必要な発言ランクロールが存在しなければ自動作成する"""
+        if not guild.me.guild_permissions.manage_roles:
+            return [], []
+
         existing_role_names = {role.name for role in guild.roles}
         created_roles = []
         already_existing_roles = []
@@ -77,8 +108,12 @@ class Leveling(commands.Cog):
                         reason="発言レベルシステム用のロール自動生成",
                     )
                     created_roles.append(role_name)
+                except discord.Forbidden:
+                    logger.warning(
+                        f"[{guild.name}] ロール作成権限が不足しています: {role_name}"
+                    )
                 except Exception as e:
-                    print(
+                    logger.error(
                         f"[{guild.name}] ロール作成エラー ({role_name}): {e}"
                     )
             else:
@@ -88,27 +123,48 @@ class Leveling(commands.Cog):
 
     async def update_user_roles(
         self, member: discord.Member, new_level: int
-    ):
-        """レベルに応じて発言ランクロールを自動付与・付け替え"""
+    ) -> bool:
+        """レベルに応じて発言ランクロールを自動付与・付け替え（ランクが上昇した場合はTrueを返す）"""
         guild = member.guild
-        await self.ensure_roles(guild)
+        if not guild.me.guild_permissions.manage_roles:
+            return False
 
         target_rank_name, _ = self.get_rank_info(new_level)
         all_rank_names = {info[0] for info in ADVENTURER_RANKS.values()}
 
+        target_role = discord.utils.get(guild.roles, name=target_rank_name)
+
+        # 剥奪すべき古いランクロールを抽出
         roles_to_remove = [
             role
             for role in member.roles
-            if role.name in all_rank_names
-            and role.name != target_rank_name
+            if role.name in all_rank_names and role.name != target_rank_name
         ]
-        target_role = discord.utils.get(guild.roles, name=target_rank_name)
 
-        if roles_to_remove:
-            await member.remove_roles(*roles_to_remove)
+        is_rank_changed = False
+        try:
+            # 必要な場合のみロール削除 API を呼び出す
+            if roles_to_remove:
+                await member.remove_roles(
+                    *roles_to_remove, reason="レベルアップに伴う旧ランクの削除"
+                )
 
-        if target_role and target_role not in member.roles:
-            await member.add_roles(target_role)
+            # ターゲットロールをまだ持っていない場合のみ付与 API を呼び出す
+            if target_role and target_role not in member.roles:
+                await member.add_roles(
+                    target_role, reason="レベルアップに伴う新ランクの付与"
+                )
+                is_rank_changed = True
+        except discord.Forbidden:
+            logger.warning(
+                f"[{guild.name}] ロール変更権限が不足しています（Botのロール順位を確認してください）"
+            )
+        except Exception as e:
+            logger.error(
+                f"[{guild.name}] {member.display_name} のロール更新失敗: {e}"
+            )
+
+        return is_rank_changed
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -121,7 +177,8 @@ class Leveling(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild:
+        # BotやDMでの発言は無視
+        if message.author.bot or not message.guild or not self.db_pool:
             return
 
         guild_id = message.guild.id
@@ -139,7 +196,7 @@ class Leveling(commands.Cog):
                 user_id,
             )
 
-            # 10秒のクールダウン
+            # 10秒のクールダウンチェック
             if row and row["last_message_at"]:
                 delta = (now - row["last_message_at"]).total_seconds()
                 if delta < 10:
@@ -169,19 +226,40 @@ class Leveling(commands.Cog):
                 now,
             )
 
+            # レベルアップ時の処理
             if new_level > current_level:
                 rank_name, _ = self.get_rank_info(new_level)
-                await message.channel.send(
+
+                # レベルアップ通知チャンネルを取得して送信
+                level_channel = self.get_notification_channel(
+                    message.guild, message.channel, kind="level"
+                )
+                await level_channel.send(
                     f"🎉 {message.author.mention} が **Lv.{new_level}** にレベルアップ！\n"
                     f"現在の発言ランク: **{rank_name}**"
                 )
 
+                # ロール更新とランクアップチェック
                 if isinstance(message.author, discord.Member):
-                    await self.update_user_roles(message.author, new_level)
+                    is_rank_changed = await self.update_user_roles(
+                        message.author, new_level
+                    )
+
+                    # ランクアップ（新しい称号ロールが付与された）時の別通知処理
+                    if is_rank_changed:
+                        rank_channel = self.get_notification_channel(
+                            message.guild, message.channel, kind="rank"
+                        )
+                        embed = discord.Embed(
+                            title="👑 RANK UP!",
+                            description=f"{message.author.mention} が新しいランク **【{rank_name}】** に昇格しました！",
+                            color=discord.Color.purple(),
+                        )
+                        await rank_channel.send(embed=embed)
 
     # --- /level コマンド ---
     @app_commands.command(
-        name="level", description="自分のレベルと発言ランクを確認します"
+        name="level", description="自分または指定ユーザーのレベルと発言ランクを確認します"
     )
     async def level(
         self,
@@ -190,6 +268,12 @@ class Leveling(commands.Cog):
     ):
         user = target_user or interaction.user
         guild_id = interaction.guild_id
+
+        if not interaction.guild or not self.db_pool:
+            await interaction.response.send_message(
+                "このコマンドはサーバー内でのみ使用できます。", ephemeral=True
+            )
+            return
 
         async with self.db_pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -208,7 +292,7 @@ class Leveling(commands.Cog):
         rank_name, rank_color = self.get_rank_info(level)
 
         embed = discord.Embed(
-            title=f"⚔️ {user.display_name} の発言数ステータス", color=rank_color
+            title=f"⚔️ {user.display_name} の発言ステータス", color=rank_color
         )
         embed.set_thumbnail(url=user.display_avatar.url)
         embed.add_field(name="発言ランク", value=f"**{rank_name}**", inline=False)
@@ -226,7 +310,7 @@ class Leveling(commands.Cog):
     )
     async def rank(self, interaction: discord.Interaction):
         guild = interaction.guild
-        if not guild:
+        if not guild or not self.db_pool:
             await interaction.response.send_message(
                 "このコマンドはサーバー内でのみ使用できます。", ephemeral=True
             )
@@ -336,10 +420,8 @@ class Leveling(commands.Cog):
             )
             return
 
-        # 応答のタイムアウトを防ぐために保留処理を行う
         await interaction.response.defer(ephemeral=True)
 
-        # ロールの存在チェックと自動生成
         await self.ensure_roles(guild)
 
         target_role_name = "🔰 Novice（駆け出し）"
@@ -354,19 +436,26 @@ class Leveling(commands.Cog):
         added_count = 0
         already_has_count = 0
 
-        # サーバー内の全メンバーをチェックして付与
-        for member in guild.members:
+        # 全メンバーを取得
+        members = guild.members
+        if len(members) < guild.member_count:
+            try:
+                members = [m async for m in guild.fetch_members(limit=None)]
+            except Exception:
+                pass
+
+        for member in members:
             if member.bot:
-                continue  # Botは除外
+                continue
 
             if beginner_role in member.roles:
                 already_has_count += 1
             else:
                 try:
-                    await member.add_roles(beginner_role)
+                    await member.add_roles(beginner_role, reason="一括初期ロール付与")
                     added_count += 1
                 except Exception as e:
-                    print(
+                    logger.error(
                         f"[{guild.name}] {member.display_name} へのロール付与失敗: {e}"
                     )
 
