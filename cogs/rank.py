@@ -11,12 +11,13 @@ logger = logging.getLogger(__name__)
 
 # 冒険者ランクの設定 (必要レベル : (ロール名, ロールカラー))
 ADVENTURER_RANKS = {
-    100: ("👑 Legend（伝説の勇者）", discord.Color.from_rgb(255, 215, 0)),  # 黄金
-    70: ("🛡️ Adamantite（金剛級）", discord.Color.from_rgb(112, 128, 144)),  # アダマンタイト
-    50: ("🔮 Mythril（神銀級）", discord.Color.from_rgb(138, 43, 226)),  # ミスリル
-    35: ("⚜️ Platinum（白金級）", discord.Color.from_rgb(229, 228, 226)),  # プラチナ
-    20: ("🥇 Gold（黄金級）", discord.Color.gold()),  # ゴールド
-    10: ("⚔️ Silver（白銀級）", discord.Color.light_grey()),  # シルバー
+    777: ("😇 God (神)", discord.Color.from_rgb(255, 0, 0)),  # 赤
+    500: ("👑 Legend（伝説の勇者）", discord.Color.from_rgb(255, 215, 0)),  # 黄金
+    300: ("🛡️ Adamantite（金剛級）", discord.Color.from_rgb(112, 128, 144)),  # アダマンタイト
+    100: ("🔮 Mythril（神銀級）", discord.Color.from_rgb(138, 43, 226)),  # ミスリル
+    75: ("⚜️ Platinum（白金級）", discord.Color.from_rgb(229, 228, 226)),  # プラチナ
+    50: ("🥇 Gold（黄金級）", discord.Color.gold()),  # ゴールド
+    25: ("⚔️ Silver（白銀級）", discord.Color.light_grey()),  # シルバー
     5: ("🗡️ Bronze（青銅級）", discord.Color.dark_orange()),  # ブロンズ
     1: ("🔰 Novice（駆け出し）", discord.Color.green()),  # グリーン
 }
@@ -196,7 +197,7 @@ class Leveling(commands.Cog):
                 user_id,
             )
 
-            # 10秒のクールダウンチェック
+            # 30秒のクールダウンチェック
             if row and row["last_message_at"]:
                 delta = (now - row["last_message_at"]).total_seconds()
                 if delta < 30:
@@ -205,7 +206,7 @@ class Leveling(commands.Cog):
             current_xp = row["xp"] if row else 0
             current_level = row["level"] if row else 1
 
-            added_xp = random.randint(15, 25)
+            added_xp = random.randint(10, 30)
             new_xp = current_xp + added_xp
             new_level = self.calculate_level(new_xp)
 
@@ -234,9 +235,12 @@ class Leveling(commands.Cog):
                 level_channel = self.get_notification_channel(
                     message.guild, message.channel, kind="level"
                 )
+                
+                # メンションで通知音が鳴らないよう allowed_mentions を指定
                 await level_channel.send(
                     f"🎉 {message.author.mention} が **Lv.{new_level}** にレベルアップ！\n"
-                    f"現在の発言ランク: **{rank_name}**"
+                    f"現在の発言ランク: **{rank_name}**",
+                    allowed_mentions=discord.AllowedMentions(users=False)
                 )
 
                 # ロール更新とランクアップチェック
@@ -255,7 +259,10 @@ class Leveling(commands.Cog):
                             description=f"{message.author.mention} が新しいランク **【{rank_name}】** に昇格しました！",
                             color=discord.Color.purple(),
                         )
-                        await rank_channel.send(embed=embed)
+                        await rank_channel.send(
+                            embed=embed,
+                            allowed_mentions=discord.AllowedMentions(users=False)
+                        )
 
     # --- /level コマンド ---
     @app_commands.command(
