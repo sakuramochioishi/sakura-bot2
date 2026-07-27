@@ -307,6 +307,72 @@ class Leveling(commands.Cog):
                 ephemeral=True,
             )
 
+    # --- サーバー全員にビギナーロールを一括付与するコマンド ---
+    @app_commands.command(
+        name="sync_beginner_roles",
+        description="サーバー内の全員に初期ロール（Novice）を一括付与します（管理者専用）",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def sync_beginner_roles(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "このコマンドはサーバー内でのみ使用できます。", ephemeral=True
+            )
+            return
+
+        # 応答のタイムアウトを防ぐために保留処理を行う
+        await interaction.response.defer(ephemeral=True)
+
+        # ロールの存在チェックと自動生成
+        await self.ensure_roles(guild)
+
+        target_role_name = "🔰 Novice（駆け出し）"
+        beginner_role = discord.utils.get(guild.roles, name=target_role_name)
+
+        if not beginner_role:
+            await interaction.followup.send(
+                f"❌ ロール `{target_role_name}` が見つかりませんでした。"
+            )
+            return
+
+        added_count = 0
+        already_has_count = 0
+
+        # サーバー内の全メンバーをチェックして付与
+        for member in guild.members:
+            if member.bot:
+                continue  # Botは除外
+
+            if beginner_role in member.roles:
+                already_has_count += 1
+            else:
+                try:
+                    await member.add_roles(beginner_role)
+                    added_count += 1
+                except Exception as e:
+                    print(
+                        f"[{guild.name}] {member.display_name} へのロール付与失敗: {e}"
+                    )
+
+        await interaction.followup.send(
+            f"✅ **一括付与が完了しました！**\n"
+            f"・新規付与: **{added_count} 人**\n"
+            f"・既に所有済み: **{already_has_count} 人**"
+        )
+
+    @sync_beginner_roles.error
+    async def sync_beginner_roles_error(
+        self,
+        interaction: discord.Interaction,
+        error: app_commands.AppCommandError,
+    ):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message(
+                "❌ このコマンドを実行するには**管理者権限（Administrator）**が必要です。",
+                ephemeral=True,
+            )
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Leveling(bot))
