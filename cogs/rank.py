@@ -11,11 +11,11 @@ logger = logging.getLogger(__name__)
 
 # 冒険者ランクの設定 (必要レベル : (ロール名, ロールカラー))
 ADVENTURER_RANKS = {
-    777: ("😇 God (神)", discord.Color.from_rgb(255, 0, 0)),  # 赤
-    500: ("👑 Legend（伝説の勇者）", discord.Color.from_rgb(255, 215, 0)),  # 黄金
-    300: ("🛡️ Adamantite（金剛級）", discord.Color.from_rgb(112, 128, 144)),  # アダマンタイト
-    100: ("🔮 Mythril（神銀級）", discord.Color.from_rgb(138, 43, 226)),  # ミスリル
-    75: ("⚜️ Platinum（白金級）", discord.Color.from_rgb(229, 228, 226)),  # プラチナ
+    777: ("🪽 God (神)", discord.Color.from_rgb(255, 0, 0)),  # 赤
+    600: ("👑 Legend（伝説の勇者）", discord.Color.from_rgb(255, 215, 0)),  # 黄金
+    400: ("🛡️ Adamantite（金剛級）", discord.Color.from_rgb(112, 128, 144)),  # アダマンタイト
+    200: ("🔮 Mythril（神銀級）", discord.Color.from_rgb(138, 43, 226)),  # ミスリル
+    100: ("⚜️ Platinum（白金級）", discord.Color.from_rgb(229, 228, 226)),  # プラチナ
     50: ("🥇 Gold（黄金級）", discord.Color.gold()),  # ゴールド
     25: ("⚔️ Silver（白銀級）", discord.Color.light_grey()),  # シルバー
     5: ("🗡️ Bronze（青銅級）", discord.Color.dark_orange()),  # ブロンズ
