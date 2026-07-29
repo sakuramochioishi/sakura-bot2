@@ -34,13 +34,13 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS guild_settings (
-                guild_id VARCHAR(30) PRIMARY KEY,
+                guild_id BIGINT PRIMARY KEY,
                 quiz_timeout TEXT DEFAULT '900.0',
                 answer_timeout TEXT DEFAULT '15.0',
                 channels TEXT[] DEFAULT '{}'::TEXT[],
-                level_channel_id VARCHAR(30) DEFAULT NULL,
-                rank_channel_id VARCHAR(30) DEFAULT NULL,
-                eew_channel_id VARCHAR(30) DEFAULT NULL,
+                level_channel_id BIGINT DEFAULT NULL,
+                rank_channel_id BIGINT DEFAULT NULL,
+                eew_channel_id BIGINT DEFAULT NULL,
                 level_mention TEXT DEFAULT NULL,
                 rank_mention TEXT DEFAULT NULL,
                 eew_mention TEXT DEFAULT NULL
@@ -51,9 +51,9 @@ class SettingsCog(commands.GroupCog, name="setting"):
         cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS quiz_timeout TEXT DEFAULT '900.0';")
         cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS answer_timeout TEXT DEFAULT '15.0';")
         cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS channels TEXT[] DEFAULT '{}'::TEXT[];")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_channel_id VARCHAR(30) DEFAULT NULL;")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_channel_id VARCHAR(30) DEFAULT NULL;")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_channel_id VARCHAR(30) DEFAULT NULL;")
+        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_channel_id BIGINT DEFAULT NULL;")
+        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_channel_id BIGINT DEFAULT NULL;")
+        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_channel_id BIGINT DEFAULT NULL;")
         cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_mention TEXT DEFAULT NULL;")
         cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_mention TEXT DEFAULT NULL;")
         cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_mention TEXT DEFAULT NULL;")
@@ -76,10 +76,11 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
                     conn = self._get_connection()
                     cur = conn.cursor()
+                    # 'default' の代わりに '0' を指定 (BIGINTエラー回避)
                     cur.execute(
                         """
                         INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels)
-                        VALUES ('default', %s, %s, %s)
+                        VALUES ('0', %s, %s, %s)
                         ON CONFLICT (guild_id) DO NOTHING;
                     """,
                         (quiz_timeout, answer_timeout, channels),
@@ -111,8 +112,9 @@ class SettingsCog(commands.GroupCog, name="setting"):
         row = cur.fetchone()
 
         if row is None:
+            # 'default' ではなく '0' から初期データを取得
             cur.execute(
-                "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id, level_mention, rank_mention, eew_mention FROM guild_settings WHERE guild_id = 'default';"
+                "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id, level_mention, rank_mention, eew_mention FROM guild_settings WHERE guild_id = '0';"
             )
             default_row = cur.fetchone()
 
@@ -140,9 +142,9 @@ class SettingsCog(commands.GroupCog, name="setting"):
             "quiz_timeout": float(row[0]) if row[0] else 900.0,
             "answer_timeout": float(row[1]) if row[1] else 15.0,
             "channels": [int(cid) for cid in row[2]] if row[2] else [],
-            "level_channel_id": int(row[3]) if row[3] else None,
-            "rank_channel_id": int(row[4]) if row[4] else None,
-            "eew_channel_id": int(row[5]) if row[5] else None,
+            "level_channel_id": int(row[3]) if row[3] is not None else None,
+            "rank_channel_id": int(row[4]) if row[4] is not None else None,
+            "eew_channel_id": int(row[5]) if row[5] is not None else None,
             "level_mention": row[6],
             "rank_mention": row[7],
             "eew_mention": row[8],
@@ -164,9 +166,6 @@ class SettingsCog(commands.GroupCog, name="setting"):
         """指定されたギルドの設定を上書き保存する"""
         guild_id_str = str(guild_id)
         channels_str_list = [str(cid) for cid in channels]
-        l_ch_str = str(level_channel_id) if level_channel_id is not None else None
-        r_ch_str = str(rank_channel_id) if rank_channel_id is not None else None
-        e_ch_str = str(eew_channel_id) if eew_channel_id is not None else None
 
         conn = self._get_connection()
         cur = conn.cursor()
@@ -182,9 +181,9 @@ class SettingsCog(commands.GroupCog, name="setting"):
                 str(quiz_timeout),
                 str(answer_timeout),
                 channels_str_list,
-                l_ch_str,
-                r_ch_str,
-                e_ch_str,
+                level_channel_id,
+                rank_channel_id,
+                eew_channel_id,
                 level_mention,
                 rank_mention,
                 eew_mention,
@@ -416,7 +415,6 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # (quiz_setting, reishou_setting は省略せず同様に含まれます)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SettingsCog(bot))
