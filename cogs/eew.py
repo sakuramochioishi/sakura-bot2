@@ -70,13 +70,14 @@ class EEWCog(commands.Cog):
                         if shindo_value < 4.0:
                             continue
 
-                        # setting.py から通知対象チャンネルを取得（"setting" または "SettingsCog" を検索）
+                       # setting.py から通知対象チャンネルとメンションを取得
                         settings_cog = self.bot.get_cog("setting") or self.bot.get_cog("SettingsCog")
                         if not settings_cog:
                             continue
 
-                        target_channel_ids = settings_cog.get_all_eew_channel_ids()
-                        if not target_channel_ids:
+                        # [(channel_id, mention_str), ...] のタプルリストを取得
+                        target_list = settings_cog.get_all_eew_targets()
+                        if not target_list:
                             continue
 
                         hypocenter = data.get("Hypocenter", "不明")
@@ -95,11 +96,12 @@ class EEWCog(commands.Cog):
                         embed.add_field(name="震源地", value=hypocenter, inline=False)
                         embed.set_footer(text="データ提供: Wolfx API")
 
-                        for channel_id in target_channel_ids:
+                        for channel_id, mention_str in target_list:
                             channel = self.bot.get_channel(channel_id)
                             if channel:
                                 try:
-                                    await channel.send(embed=embed)
+                                    # メンション設定があれば本文(content)に載せて送信
+                                    await channel.send(content=mention_str if mention_str else None, embed=embed)
                                 except Exception as send_error:
                                     print(f"[EEWCog] メッセージ送信失敗 ({channel_id}): {send_error}")
 
