@@ -31,7 +31,7 @@ class Leveling(commands.Cog):
 
     async def cog_load(self):
         """Cogロード時にDB接続 & テーブル自動作成"""
-        db_url = os.getenv("DATABASE_URL")
+        db_url = os.getenv("DATABASE_URL3")
         if not db_url:
             raise ValueError(
                 "環境変数 'DATABASE_URL' が設定されていません。"
