@@ -23,14 +23,18 @@ class SettingsCog(commands.GroupCog, name="setting"):
         self._init_db()
         self._migrate_json_to_db()
 
+    def _get_connection(self):
+        """DB接続を取得するヘルパー"""
+        return psycopg2.connect(DATABASE_URL)
+
     def _init_db(self):
-        """Neonに設定保存用のテーブルを作成し、必要なカラムを保証する"""
-        conn = psycopg2.connect(DATABASE_URL)
+        """データベースに設定保存用のテーブルを作成し、必要なカラムを保証する"""
+        conn = self._get_connection()
         cur = conn.cursor()
 
-        # テーブル作成
+        # テーブル作成（合体させた guild_settings テーブルに統一）
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS bot_settings (
+            CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id VARCHAR(30) PRIMARY KEY,
                 quiz_timeout TEXT DEFAULT '900.0',
                 answer_timeout TEXT DEFAULT '15.0',
@@ -41,15 +45,24 @@ class SettingsCog(commands.GroupCog, name="setting"):
             );
         """)
 
-        # 既存テーブルがある場合のために新カラムを後付け追加（エラー無視）
+        # 既存テーブルがある場合のためにカラムを追加（安全のため）
         cur.execute(
-            "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS level_channel_id VARCHAR(30) DEFAULT NULL;"
+            "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS quiz_timeout TEXT DEFAULT '900.0';"
         )
         cur.execute(
-            "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS rank_channel_id VARCHAR(30) DEFAULT NULL;"
+            "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS answer_timeout TEXT DEFAULT '15.0';"
         )
         cur.execute(
-            "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS eew_channel_id VARCHAR(30) DEFAULT NULL;"
+            "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS channels TEXT[] DEFAULT '{}'::TEXT[];"
+        )
+        cur.execute(
+            "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_channel_id VARCHAR(30) DEFAULT NULL;"
+        )
+        cur.execute(
+            "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_channel_id VARCHAR(30) DEFAULT NULL;"
+        )
+        cur.execute(
+            "ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_channel_id VARCHAR(30) DEFAULT NULL;"
         )
 
         conn.commit()
@@ -57,7 +70,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
         conn.close()
 
     def _migrate_json_to_db(self):
-        """古い bot_config.json があれば、自動的にNeonへ移行する"""
+        """古い bot_config.json があれば、自動的にデータベースへ移行する"""
         if os.path.exists(SETTINGS_FILE):
             try:
                 with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -77,11 +90,11 @@ class SettingsCog(commands.GroupCog, name="setting"):
                         )
                     ]
 
-                    conn = psycopg2.connect(DATABASE_URL)
+                    conn = self._get_connection()
                     cur = conn.cursor()
                     cur.execute(
                         """
-                        INSERT INTO bot_settings (guild_id, quiz_timeout, answer_timeout, channels)
+                        INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels)
                         VALUES ('default', %s, %s, %s)
                         ON CONFLICT (guild_id) DO NOTHING;
                     """,
@@ -91,7 +104,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
                     cur.close()
                     conn.close()
                     print(
-                        "⚙️ 【移行完了】設定JSONデータをNeonデータベースに引っ越ししました！"
+                        "⚙️ 【移行完了】設定JSONデータをデータベースに引っ越ししました！"
                     )
 
                 os.rename(SETTINGS_FILE, f"{SETTINGS_FILE}.bak")
@@ -106,13 +119,13 @@ class SettingsCog(commands.GroupCog, name="setting"):
     def _get_guild_settings(self, guild_id: int | str) -> dict:
         """指定されたギルドの設定をデータベースから取得する（なければ初期値を作成）"""
         guild_id_str = str(guild_id)
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = self._get_connection()
         cur = conn.cursor()
 
         cur.execute(
             """
             SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id 
-            FROM bot_settings WHERE guild_id = %s;
+            FROM guild_settings WHERE guild_id = %s;
         """,
             (guild_id_str,),
         )
@@ -120,7 +133,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
         if row is None:
             cur.execute(
-                "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id FROM bot_settings WHERE guild_id = 'default';"
+                "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id FROM guild_settings WHERE guild_id = 'default';"
             )
             default_row = cur.fetchone()
 
@@ -145,7 +158,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
             cur.execute(
                 """
-                INSERT INTO bot_settings (guild_id, quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id)
+                INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s);
             """,
                 (guild_id_str, quiz_t, answer_t, chs, l_ch, r_ch, e_ch),
@@ -157,8 +170,8 @@ class SettingsCog(commands.GroupCog, name="setting"):
         conn.close()
 
         return {
-            "quiz_timeout": float(row[0]),
-            "answer_timeout": float(row[1]),
+            "quiz_timeout": float(row[0]) if row[0] else 900.0,
+            "answer_timeout": float(row[1]) if row[1] else 15.0,
             "channels": [int(cid) for cid in row[2]] if row[2] else [],
             "level_channel_id": int(row[3]) if row[3] else None,
             "rank_channel_id": int(row[4]) if row[4] else None,
@@ -182,11 +195,11 @@ class SettingsCog(commands.GroupCog, name="setting"):
         r_ch_str = str(rank_channel_id) if rank_channel_id is not None else None
         e_ch_str = str(eew_channel_id) if eew_channel_id is not None else None
 
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = self._get_connection()
         cur = conn.cursor()
         cur.execute(
             """
-            UPDATE bot_settings 
+            UPDATE guild_settings 
             SET quiz_timeout = %s, answer_timeout = %s, channels = %s, level_channel_id = %s, rank_channel_id = %s, eew_channel_id = %s
             WHERE guild_id = %s;
         """,
@@ -230,9 +243,9 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
     def get_all_eew_channel_ids(self) -> list[int]:
         """全サーバーの地震速報通知先チャンネルIDを一覧取得する（eew.pyで使用）"""
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = self._get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT eew_channel_id FROM bot_settings WHERE eew_channel_id IS NOT NULL;")
+        cur.execute("SELECT eew_channel_id FROM guild_settings WHERE eew_channel_id IS NOT NULL;")
         rows = cur.fetchall()
         cur.close()
         conn.close()

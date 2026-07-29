@@ -70,8 +70,8 @@ class EEWCog(commands.Cog):
                         if shindo_value < 4.0:
                             continue
 
-                        # setting.py から通知対象チャンネルを取得
-                        settings_cog = self.bot.get_cog("SettingsCog")
+                        # setting.py から通知対象チャンネルを取得（"setting" または "SettingsCog" を検索）
+                        settings_cog = self.bot.get_cog("setting") or self.bot.get_cog("SettingsCog")
                         if not settings_cog:
                             continue
 
