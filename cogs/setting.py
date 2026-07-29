@@ -36,7 +36,8 @@ class SettingsCog(commands.GroupCog, name="setting"):
                 answer_timeout TEXT DEFAULT '15.0',
                 channels TEXT[] DEFAULT '{}'::TEXT[],
                 level_channel_id VARCHAR(30) DEFAULT NULL,
-                rank_channel_id VARCHAR(30) DEFAULT NULL
+                rank_channel_id VARCHAR(30) DEFAULT NULL,
+                eew_channel_id VARCHAR(30) DEFAULT NULL
             );
         """)
 
@@ -46,6 +47,9 @@ class SettingsCog(commands.GroupCog, name="setting"):
         )
         cur.execute(
             "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS rank_channel_id VARCHAR(30) DEFAULT NULL;"
+        )
+        cur.execute(
+            "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS eew_channel_id VARCHAR(30) DEFAULT NULL;"
         )
 
         conn.commit()
@@ -107,7 +111,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
         cur.execute(
             """
-            SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id 
+            SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id 
             FROM bot_settings WHERE guild_id = %s;
         """,
             (guild_id_str,),
@@ -116,36 +120,38 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
         if row is None:
             cur.execute(
-                "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id FROM bot_settings WHERE guild_id = 'default';"
+                "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id FROM bot_settings WHERE guild_id = 'default';"
             )
             default_row = cur.fetchone()
 
             if default_row:
-                quiz_t, answer_t, chs, l_ch, r_ch = (
+                quiz_t, answer_t, chs, l_ch, r_ch, e_ch = (
                     default_row[0],
                     default_row[1],
                     default_row[2],
                     default_row[3],
                     default_row[4],
+                    default_row[5],
                 )
             else:
-                quiz_t, answer_t, chs, l_ch, r_ch = (
+                quiz_t, answer_t, chs, l_ch, r_ch, e_ch = (
                     "900.0",
                     "15.0",
                     [],
+                    None,
                     None,
                     None,
                 )
 
             cur.execute(
                 """
-                INSERT INTO bot_settings (guild_id, quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id)
-                VALUES (%s, %s, %s, %s, %s, %s);
+                INSERT INTO bot_settings (guild_id, quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s);
             """,
-                (guild_id_str, quiz_t, answer_t, chs, l_ch, r_ch),
+                (guild_id_str, quiz_t, answer_t, chs, l_ch, r_ch, e_ch),
             )
             conn.commit()
-            row = (quiz_t, answer_t, chs, l_ch, r_ch)
+            row = (quiz_t, answer_t, chs, l_ch, r_ch, e_ch)
 
         cur.close()
         conn.close()
@@ -156,6 +162,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
             "channels": [int(cid) for cid in row[2]] if row[2] else [],
             "level_channel_id": int(row[3]) if row[3] else None,
             "rank_channel_id": int(row[4]) if row[4] else None,
+            "eew_channel_id": int(row[5]) if row[5] else None,
         }
 
     def _save_guild_settings(
@@ -166,19 +173,21 @@ class SettingsCog(commands.GroupCog, name="setting"):
         channels: list[int],
         level_channel_id: int | None,
         rank_channel_id: int | None,
+        eew_channel_id: int | None,
     ):
         """指定されたギルドの設定を上書き保存する"""
         guild_id_str = str(guild_id)
         channels_str_list = [str(cid) for cid in channels]
         l_ch_str = str(level_channel_id) if level_channel_id is not None else None
         r_ch_str = str(rank_channel_id) if rank_channel_id is not None else None
+        e_ch_str = str(eew_channel_id) if eew_channel_id is not None else None
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
         cur.execute(
             """
             UPDATE bot_settings 
-            SET quiz_timeout = %s, answer_timeout = %s, channels = %s, level_channel_id = %s, rank_channel_id = %s
+            SET quiz_timeout = %s, answer_timeout = %s, channels = %s, level_channel_id = %s, rank_channel_id = %s, eew_channel_id = %s
             WHERE guild_id = %s;
         """,
             (
@@ -187,6 +196,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
                 channels_str_list,
                 l_ch_str,
                 r_ch_str,
+                e_ch_str,
                 guild_id_str,
             ),
         )
@@ -218,6 +228,16 @@ class SettingsCog(commands.GroupCog, name="setting"):
         """指定されたサーバーのランクアップ通知チャンネルIDを取得"""
         return self._get_guild_settings(guild_id)["rank_channel_id"]
 
+    def get_all_eew_channel_ids(self) -> list[int]:
+        """全サーバーの地震速報通知先チャンネルIDを一覧取得する（eew.pyで使用）"""
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("SELECT eew_channel_id FROM bot_settings WHERE eew_channel_id IS NOT NULL;")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [int(row[0]) for row in rows if row[0]]
+
     # ==========================================
     # 1. /setting status コマンド
     # ==========================================
@@ -248,6 +268,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
                 valid_ids,
                 current_settings["level_channel_id"],
                 current_settings["rank_channel_id"],
+                current_settings["eew_channel_id"],
             )
             current_settings["channels"] = valid_ids
 
@@ -270,17 +291,15 @@ class SettingsCog(commands.GroupCog, name="setting"):
             if current_settings["rank_channel_id"]
             else None
         )
+        eew_ch = (
+            interaction.guild.get_channel(current_settings["eew_channel_id"])
+            if current_settings["eew_channel_id"]
+            else None
+        )
 
-        level_text = (
-            level_ch.mention
-            if level_ch
-            else "未設定（※メッセージ送信元のチャンネルに送信されます）"
-        )
-        rank_text = (
-            rank_ch.mention
-            if rank_ch
-            else "未設定（※メッセージ送信元のチャンネルに送信されます）"
-        )
+        level_text = level_ch.mention if level_ch else "未設定"
+        rank_text = rank_ch.mention if rank_ch else "未設定"
+        eew_text = eew_ch.mention if eew_ch else "未設定（※通知されません）"
 
         q_timeout_min = int(current_settings["quiz_timeout"] / 60)
         a_timeout_sec = int(current_settings["answer_timeout"])
@@ -290,7 +309,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
         )
         embed.add_field(
             name="📢 通知用チャンネル設定",
-            value=f"• レベルアップ通知: {level_text}\n• ランクアップ通知: {rank_text}",
+            value=f"• レベルアップ通知: {level_text}\n• ランクアップ通知: {rank_text}\n• 地震速報(震度4以上): {eew_text}",
             inline=False,
         )
         embed.add_field(
@@ -312,7 +331,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
     # ==========================================
     @app_commands.command(
         name="notification",
-        description="レベルアップ・ランクアップ通知の送信先チャンネルを設定します",
+        description="各種通知の送信先チャンネルを設定します",
     )
     @app_commands.describe(
         種類="設定する通知の種類を選択してください",
@@ -325,6 +344,9 @@ class SettingsCog(commands.GroupCog, name="setting"):
             ),
             app_commands.Choice(
                 name="ランクアップ通知 (rank)", value="rank"
+            ),
+            app_commands.Choice(
+                name="緊急地震速報 (eew)", value="eew"
             ),
         ]
     )
@@ -349,7 +371,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
             msg = (
                 f"レベルアップ通知の送信先を {チャンネル.mention} に設定しました。"
                 if チャンネル
-                else "レベルアップ通知の送信先設定を解除しました。（元メッセージのチャンネルに送信されます）"
+                else "レベルアップ通知の送信先設定を解除しました。"
             )
             embed.add_field(
                 name="📈 レベルアップ通知", value=msg, inline=False
@@ -360,13 +382,23 @@ class SettingsCog(commands.GroupCog, name="setting"):
             msg = (
                 f"ランクアップ通知の送信先を {チャンネル.mention} に設定しました。"
                 if チャンネル
-                else "ランクアップ通知の送信先設定を解除しました。（元メッセージのチャンネルに送信されます）"
+                else "ランクアップ通知の送信先設定を解除しました。"
             )
             embed.add_field(
                 name="👑 ランクアップ通知", value=msg, inline=False
             )
 
-        # 修正ポイント: 更新後の current_settings を使ってDB保存する
+        elif 種類 == "eew":
+            current_settings["eew_channel_id"] = target_id
+            msg = (
+                f"地震速報（震度4以上）の送信先を {チャンネル.mention} に設定しました。"
+                if チャンネル
+                else "地震速報の通知先設定を解除しました。"
+            )
+            embed.add_field(
+                name="🚨 緊急地震速報", value=msg, inline=False
+            )
+
         self._save_guild_settings(
             interaction.guild_id,
             current_settings["quiz_timeout"],
@@ -374,6 +406,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
             current_settings["channels"],
             current_settings["level_channel_id"],
             current_settings["rank_channel_id"],
+            current_settings["eew_channel_id"],
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -431,6 +464,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
             current_settings["channels"],
             current_settings["level_channel_id"],
             current_settings["rank_channel_id"],
+            current_settings["eew_channel_id"],
         )
         await interaction.response.send_message(embed=embed)
 
@@ -479,6 +513,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
                     channels_list,
                     current_settings["level_channel_id"],
                     current_settings["rank_channel_id"],
+                    current_settings["eew_channel_id"],
                 )
                 await interaction.response.send_message(
                     f"✅ {target_channel.mention} を冷笑削除の**対象チャンネル**に設定しました！",
@@ -495,6 +530,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
                     channels_list,
                     current_settings["level_channel_id"],
                     current_settings["rank_channel_id"],
+                    current_settings["eew_channel_id"],
                 )
                 await interaction.response.send_message(
                     f"✅ {target_channel.mention} を冷笑削除の**対象外**にしました。",
