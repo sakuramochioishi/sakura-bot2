@@ -13,6 +13,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 SETTINGS_FILE = "bot_config.json"
 
 
+
 class SettingsCog(commands.GroupCog, name="setting"):
 
     def __init__(self, bot: commands.Bot):
