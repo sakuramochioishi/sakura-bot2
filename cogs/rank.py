@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 import logging
 import os
@@ -28,13 +29,14 @@ class Leveling(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db_pool: asyncpg.Pool | None = None
+        self._roles_ensured: bool = False  # on_ready の重複実行防止フラグ
 
     async def cog_load(self):
         """Cogロード時にDB接続 & テーブル自動作成"""
         db_url = os.getenv("DATABASE_URL3")
         if not db_url:
             raise ValueError(
-                "環境変数 'DATABASE_URL' が設定されていません。"
+                "環境変数 'DATABASE_URL3' が設定されていません。"
             )
 
         self.db_pool = await asyncpg.create_pool(db_url)
@@ -78,13 +80,13 @@ class Leveling(commands.Cog):
 
         target_channel_id = None
         if kind == "level":
-            target_channel_id = settings_cog.get_level_channel_id(guild.id)
+            target_channel_id = getattr(settings_cog, "get_level_channel_id", lambda g: None)(guild.id)
         elif kind == "rank":
-            target_channel_id = settings_cog.get_rank_channel_id(guild.id)
+            target_channel_id = getattr(settings_cog, "get_rank_channel_id", lambda g: None)(guild.id)
 
         if target_channel_id:
             target_channel = guild.get_channel(target_channel_id)
-            if target_channel and target_channel.permissions_for(guild.me).send_messages:
+            if target_channel and isinstance(target_channel, discord.TextChannel) and target_channel.permissions_for(guild.me).send_messages:
                 return target_channel
 
         return origin_channel
@@ -169,8 +171,10 @@ class Leveling(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        for guild in self.bot.guilds:
-            await self.ensure_roles(guild)
+        if not self._roles_ensured:
+            for guild in self.bot.guilds:
+                await self.ensure_roles(guild)
+            self._roles_ensured = True
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
@@ -232,16 +236,17 @@ class Leveling(commands.Cog):
                 rank_name, _ = self.get_rank_info(new_level)
 
                 # レベルアップ通知チャンネルを取得して送信
-                level_channel = self.get_notification_channel(
-                    message.guild, message.channel, kind="level"
-                )
-                
-                # メンションで通知音が鳴らないよう allowed_mentions を指定
-                await level_channel.send(
-                    f"🎉 {message.author.mention} が **Lv.{new_level}** にレベルアップ！\n"
-                    f"現在の発言ランク: **{rank_name}**",
-                    allowed_mentions=discord.AllowedMentions(users=False)
-                )
+                if isinstance(message.channel, discord.TextChannel):
+                    level_channel = self.get_notification_channel(
+                        message.guild, message.channel, kind="level"
+                    )
+                    
+                    # メンションで通知音が鳴らないよう allowed_mentions を指定
+                    await level_channel.send(
+                        f"🎉 {message.author.mention} が **Lv.{new_level}** にレベルアップ！\n"
+                        f"現在の発言ランク: **{rank_name}**",
+                        allowed_mentions=discord.AllowedMentions(users=False)
+                    )
 
                 # ロール更新とランクアップチェック
                 if isinstance(message.author, discord.Member):
@@ -250,7 +255,7 @@ class Leveling(commands.Cog):
                     )
 
                     # ランクアップ（新しい称号ロールが付与された）時の別通知処理
-                    if is_rank_changed:
+                    if is_rank_changed and isinstance(message.channel, discord.TextChannel):
                         rank_channel = self.get_notification_channel(
                             message.guild, message.channel, kind="rank"
                         )
@@ -271,12 +276,12 @@ class Leveling(commands.Cog):
     async def level(
         self,
         interaction: discord.Interaction,
-        target_user: discord.User = None,
+        target_user: discord.User | None = None,
     ):
         user = target_user or interaction.user
         guild_id = interaction.guild_id
 
-        if not interaction.guild or not self.db_pool:
+        if not interaction.guild or not self.db_pool or not guild_id:
             await interaction.response.send_message(
                 "このコマンドはサーバー内でのみ使用できます。", ephemeral=True
             )
@@ -461,6 +466,8 @@ class Leveling(commands.Cog):
                 try:
                     await member.add_roles(beginner_role, reason="一括初期ロール付与")
                     added_count += 1
+                    # 大量のリクエストによるレートリミット回避
+                    await asyncio.sleep(0.3)
                 except Exception as e:
                     logger.error(
                         f"[{guild.name}] {member.display_name} へのロール付与失敗: {e}"

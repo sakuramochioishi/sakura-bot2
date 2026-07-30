@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import discord
@@ -29,38 +30,34 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
     def _init_db(self):
         """データベースに設定保存用のテーブルを作成し、必要なカラムを保証する"""
-        conn = self._get_connection()
-        cur = conn.cursor()
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS guild_settings (
+                        guild_id BIGINT PRIMARY KEY,
+                        quiz_timeout TEXT DEFAULT '900.0',
+                        answer_timeout TEXT DEFAULT '15.0',
+                        channels TEXT[] DEFAULT '{}'::TEXT[],
+                        level_channel_id BIGINT DEFAULT NULL,
+                        rank_channel_id BIGINT DEFAULT NULL,
+                        eew_channel_id BIGINT DEFAULT NULL,
+                        level_mention TEXT DEFAULT NULL,
+                        rank_mention TEXT DEFAULT NULL,
+                        eew_mention TEXT DEFAULT NULL
+                    );
+                """)
 
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS guild_settings (
-                guild_id BIGINT PRIMARY KEY,
-                quiz_timeout TEXT DEFAULT '900.0',
-                answer_timeout TEXT DEFAULT '15.0',
-                channels TEXT[] DEFAULT '{}'::TEXT[],
-                level_channel_id BIGINT DEFAULT NULL,
-                rank_channel_id BIGINT DEFAULT NULL,
-                eew_channel_id BIGINT DEFAULT NULL,
-                level_mention TEXT DEFAULT NULL,
-                rank_mention TEXT DEFAULT NULL,
-                eew_mention TEXT DEFAULT NULL
-            );
-        """)
-
-        # カラムが存在しない場合の安全な追加
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS quiz_timeout TEXT DEFAULT '900.0';")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS answer_timeout TEXT DEFAULT '15.0';")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS channels TEXT[] DEFAULT '{}'::TEXT[];")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_channel_id BIGINT DEFAULT NULL;")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_channel_id BIGINT DEFAULT NULL;")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_channel_id BIGINT DEFAULT NULL;")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_mention TEXT DEFAULT NULL;")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_mention TEXT DEFAULT NULL;")
-        cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_mention TEXT DEFAULT NULL;")
-
-        conn.commit()
-        cur.close()
-        conn.close()
+                # カラムが存在しない場合の安全な追加
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS quiz_timeout TEXT DEFAULT '900.0';")
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS answer_timeout TEXT DEFAULT '15.0';")
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS channels TEXT[] DEFAULT '{}'::TEXT[];")
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_channel_id BIGINT DEFAULT NULL;")
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_channel_id BIGINT DEFAULT NULL;")
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_channel_id BIGINT DEFAULT NULL;")
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_mention TEXT DEFAULT NULL;")
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_mention TEXT DEFAULT NULL;")
+                cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_mention TEXT DEFAULT NULL;")
+                conn.commit()
 
     def _migrate_json_to_db(self):
         """古い bot_config.json があれば、自動的にデータベースへ移行する"""
@@ -74,20 +71,18 @@ class SettingsCog(commands.GroupCog, name="setting"):
                     answer_timeout = str(old_data.get("quiz", {}).get("answer_timeout", 15.0))
                     channels = [str(cid) for cid in old_data.get("reishou", {}).get("channels", [])]
 
-                    conn = self._get_connection()
-                    cur = conn.cursor()
-                    # 'default' の代わりに '0' を指定 (BIGINTエラー回避)
-                    cur.execute(
-                        """
-                        INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels)
-                        VALUES ('0', %s, %s, %s)
-                        ON CONFLICT (guild_id) DO NOTHING;
-                    """,
-                        (quiz_timeout, answer_timeout, channels),
-                    )
-                    conn.commit()
-                    cur.close()
-                    conn.close()
+                    with self._get_connection() as conn:
+                        with conn.cursor() as cur:
+                            # BIGINT型に合わせて '0' ではなく 0 (数値) を使用
+                            cur.execute(
+                                """
+                                INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels)
+                                VALUES (0, %s, %s, %s)
+                                ON CONFLICT (guild_id) DO NOTHING;
+                            """,
+                                (quiz_timeout, answer_timeout, channels),
+                            )
+                            conn.commit()
                     print("⚙️ 【移行完了】設定JSONデータをデータベースに引っ越ししました！")
 
                 os.rename(SETTINGS_FILE, f"{SETTINGS_FILE}.bak")
@@ -95,48 +90,44 @@ class SettingsCog(commands.GroupCog, name="setting"):
             except Exception as e:
                 print(f"⚠️ 設定JSONの移行中にエラーが発生しました: {e}")
 
-    def _get_guild_settings(self, guild_id: int | str) -> dict:
-        """指定されたギルドの設定を取得する"""
-        guild_id_str = str(guild_id)
-        conn = self._get_connection()
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id,
-                   level_mention, rank_mention, eew_mention
-            FROM guild_settings WHERE guild_id = %s;
-        """,
-            (guild_id_str,),
-        )
-        row = cur.fetchone()
-
-        if row is None:
-            # 'default' ではなく '0' から初期データを取得
-            cur.execute(
-                "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id, level_mention, rank_mention, eew_mention FROM guild_settings WHERE guild_id = '0';"
-            )
-            default_row = cur.fetchone()
-
-            if default_row:
-                quiz_t, answer_t, chs, l_ch, r_ch, e_ch, l_m, r_m, e_m = default_row
-            else:
-                quiz_t, answer_t, chs, l_ch, r_ch, e_ch, l_m, r_m, e_m = (
-                    "900.0", "15.0", [], None, None, None, None, None, None
+    def _get_guild_settings_sync(self, guild_id: int) -> dict:
+        """指定されたギルドの設定を取得する（同期処理）"""
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id,
+                           level_mention, rank_mention, eew_mention
+                    FROM guild_settings WHERE guild_id = %s;
+                """,
+                    (guild_id,),
                 )
+                row = cur.fetchone()
 
-            cur.execute(
-                """
-                INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id, level_mention, rank_mention, eew_mention)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-            """,
-                (guild_id_str, quiz_t, answer_t, chs, l_ch, r_ch, e_ch, l_m, r_m, e_m),
-            )
-            conn.commit()
-            row = (quiz_t, answer_t, chs, l_ch, r_ch, e_ch, l_m, r_m, e_m)
+                if row is None:
+                    # デフォルト行(guild_id=0)を取得
+                    cur.execute(
+                        "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id, level_mention, rank_mention, eew_mention FROM guild_settings WHERE guild_id = 0;"
+                    )
+                    default_row = cur.fetchone()
 
-        cur.close()
-        conn.close()
+                    if default_row:
+                        quiz_t, answer_t, chs, l_ch, r_ch, e_ch, l_m, r_m, e_m = default_row
+                    else:
+                        quiz_t, answer_t, chs, l_ch, r_ch, e_ch, l_m, r_m, e_m = (
+                            "900.0", "15.0", [], None, None, None, None, None, None
+                        )
+
+                    cur.execute(
+                        """
+                        INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id, level_mention, rank_mention, eew_mention)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (guild_id) DO NOTHING;
+                    """,
+                        (guild_id, quiz_t, answer_t, chs, l_ch, r_ch, e_ch, l_m, r_m, e_m),
+                    )
+                    conn.commit()
+                    row = (quiz_t, answer_t, chs, l_ch, r_ch, e_ch, l_m, r_m, e_m)
 
         return {
             "quiz_timeout": float(row[0]) if row[0] else 900.0,
@@ -150,7 +141,11 @@ class SettingsCog(commands.GroupCog, name="setting"):
             "eew_mention": row[8],
         }
 
-    def _save_guild_settings(
+    async def _get_guild_settings(self, guild_id: int) -> dict:
+        """非同期ラッパー"""
+        return await asyncio.to_thread(self._get_guild_settings_sync, guild_id)
+
+    def _save_guild_settings_sync(
         self,
         guild_id: int,
         quiz_timeout: float,
@@ -163,83 +158,93 @@ class SettingsCog(commands.GroupCog, name="setting"):
         rank_mention: str | None = None,
         eew_mention: str | None = None,
     ):
-        """指定されたギルドの設定を上書き保存する"""
-        guild_id_str = str(guild_id)
+        """指定されたギルドの設定を保存する（同期処理）"""
         channels_str_list = [str(cid) for cid in channels]
 
-        conn = self._get_connection()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE guild_settings 
-            SET quiz_timeout = %s, answer_timeout = %s, channels = %s, 
-                level_channel_id = %s, rank_channel_id = %s, eew_channel_id = %s,
-                level_mention = %s, rank_mention = %s, eew_mention = %s
-            WHERE guild_id = %s;
-        """,
-            (
-                str(quiz_timeout),
-                str(answer_timeout),
-                channels_str_list,
-                level_channel_id,
-                rank_channel_id,
-                eew_channel_id,
-                level_mention,
-                rank_mention,
-                eew_mention,
-                guild_id_str,
-            ),
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO guild_settings (
+                        guild_id, quiz_timeout, answer_timeout, channels, 
+                        level_channel_id, rank_channel_id, eew_channel_id,
+                        level_mention, rank_mention, eew_mention
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (guild_id) DO UPDATE SET
+                        quiz_timeout = EXCLUDED.quiz_timeout,
+                        answer_timeout = EXCLUDED.answer_timeout,
+                        channels = EXCLUDED.channels,
+                        level_channel_id = EXCLUDED.level_channel_id,
+                        rank_channel_id = EXCLUDED.rank_channel_id,
+                        eew_channel_id = EXCLUDED.eew_channel_id,
+                        level_mention = EXCLUDED.level_mention,
+                        rank_mention = EXCLUDED.rank_mention,
+                        eew_mention = EXCLUDED.eew_mention;
+                """,
+                    (
+                        guild_id,
+                        str(quiz_timeout),
+                        str(answer_timeout),
+                        channels_str_list,
+                        level_channel_id,
+                        rank_channel_id,
+                        eew_channel_id,
+                        level_mention,
+                        rank_mention,
+                        eew_mention,
+                    ),
+                )
+                conn.commit()
+
+    async def _save_guild_settings(self, *args, **kwargs):
+        """非同期ラッパー"""
+        await asyncio.to_thread(self._save_guild_settings_sync, *args, **kwargs)
 
     # ==========================================
     # 👥 他のCogから呼び出すヘルパーメソッド
     # ==========================================
-    def get_quiz_timeout(self, guild_id: int) -> float:
-        return self._get_guild_settings(guild_id)["quiz_timeout"]
+    async def get_quiz_timeout(self, guild_id: int) -> float:
+        settings = await self._get_guild_settings(guild_id)
+        return settings["quiz_timeout"]
 
-    def get_answer_timeout(self, guild_id: int) -> float:
-        return self._get_guild_settings(guild_id)["answer_timeout"]
+    async def get_answer_timeout(self, guild_id: int) -> float:
+        settings = await self._get_guild_settings(guild_id)
+        return settings["answer_timeout"]
 
-    def is_reishou_target(self, guild_id: int, channel_id: int) -> bool:
-        settings = self._get_guild_settings(guild_id)
+    async def is_reishou_target(self, guild_id: int, channel_id: int) -> bool:
+        settings = await self._get_guild_settings(guild_id)
         channels = settings["channels"]
         if not channels:
             return True
         return channel_id in channels
 
-    def get_level_info(self, guild_id: int) -> tuple[int | None, str | None]:
-        """(level_channel_id, level_mention) を返す"""
-        s = self._get_guild_settings(guild_id)
+    async def get_level_info(self, guild_id: int) -> tuple[int | None, str | None]:
+        s = await self._get_guild_settings(guild_id)
         return s["level_channel_id"], s["level_mention"]
 
-    def get_rank_info(self, guild_id: int) -> tuple[int | None, str | None]:
-        """(rank_channel_id, rank_mention) を返す"""
-        s = self._get_guild_settings(guild_id)
+    async def get_rank_info(self, guild_id: int) -> tuple[int | None, str | None]:
+        s = await self._get_guild_settings(guild_id)
         return s["rank_channel_id"], s["rank_mention"]
 
-    def get_all_eew_targets(self) -> list[tuple[int, str | None]]:
-        """全サーバーの (eew_channel_id, eew_mention) 一覧を取得する"""
-        conn = self._get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT eew_channel_id, eew_mention FROM guild_settings WHERE eew_channel_id IS NOT NULL;")
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        return [(int(row[0]), row[1]) for row in rows if row[0]]
+    async def get_all_eew_targets(self) -> list[tuple[int, str | None]]:
+        def fetch():
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT eew_channel_id, eew_mention FROM guild_settings WHERE eew_channel_id IS NOT NULL;")
+                    rows = cur.fetchall()
+            return [(int(row[0]), row[1]) for row in rows if row[0]]
+
+        return await asyncio.to_thread(fetch)
 
     # ==========================================
     # 1. /setting status コマンド
     # ==========================================
-    @app_commands.command(
-        name="status", description="Botの現在の設定状況を確認します"
-    )
+    @app_commands.command(name="status", description="Botの現在の設定状況を確認します")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     async def status(self, interaction: discord.Interaction):
-        current_settings = self._get_guild_settings(interaction.guild_id)
+        current_settings = await self._get_guild_settings(interaction.guild_id)
 
         # 冷笑削除チャンネルのチェックとクリーンアップ
         channels_list = current_settings["channels"]
@@ -253,7 +258,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
                 valid_ids.append(cid)
 
         if len(channels_list) != len(valid_ids):
-            self._save_guild_settings(
+            await self._save_guild_settings(
                 interaction.guild_id,
                 current_settings["quiz_timeout"],
                 current_settings["answer_timeout"],
@@ -284,9 +289,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
         q_timeout_min = int(current_settings["quiz_timeout"] / 60)
         a_timeout_sec = int(current_settings["answer_timeout"])
 
-        embed = discord.Embed(
-            title="⚙️ Bot 現在の設定状況", color=discord.Color.blue()
-        )
+        embed = discord.Embed(title="⚙️ Bot 現在の設定状況", color=discord.Color.blue())
         embed.add_field(
             name="📢 通知用チャンネル設定",
             value=f"• レベルアップ通知: {level_text}\n• ランクアップ通知: {rank_text}\n• 地震速報(震度4以上): {eew_text}",
@@ -342,10 +345,10 @@ class SettingsCog(commands.GroupCog, name="setting"):
         メンション_タイプ: str = "none",
         ロール: discord.Role = None,
     ):
-        current_settings = self._get_guild_settings(interaction.guild_id)
+        current_settings = await self._get_guild_settings(interaction.guild_id)
 
         target_id = チャンネル.id if チャンネル else None
-        
+
         # メンション文字列の作成
         mention_str = None
         if チャンネル:
@@ -400,7 +403,7 @@ class SettingsCog(commands.GroupCog, name="setting"):
             )
             embed.add_field(name="🚨 緊急地震速報", value=msg, inline=False)
 
-        self._save_guild_settings(
+        await self._save_guild_settings(
             interaction.guild_id,
             current_settings["quiz_timeout"],
             current_settings["answer_timeout"],
