@@ -9,26 +9,22 @@ from discord.ext import commands
 # ----------------------------------------------------
 # 設定・定数
 # ----------------------------------------------------
-# DATABASE_URL2 から接続文字列を取得します
-DATABASE_URL2 = os.getenv(
-    "DATABASE_URL2", "YOUR_NEON_DATABASE_URL_HERE"
-)
+DATABASE_URL2 = os.getenv("DATABASE_URL2", "YOUR_NEON_DATABASE_URL_HERE")
 
 HANDS = {"rock": "✊", "scissors": "✌️", "paper": "🖐️"}
-
 HAND_NAMES = {"rock": "グー", "scissors": "チョキ", "paper": "パー"}
 
 
 # ----------------------------------------------------
-# DB処理ヘルパー関数
+# DB処理ヘルパー関数（Poolを使用）
 # ----------------------------------------------------
-async def record_result(user_id: int, result: str):
-    """勝敗結果をNeon DBに記録/更新する"""
-    if user_id is None:
+async def record_result(pool: asyncpg.Pool, user: discord.User | discord.Member, result: str):
+    """勝敗結果をNeon DBに記録/更新する（Botは除外）"""
+    # ユーザーが存在しない、またはBotの場合は記録しない
+    if user is None or user.bot:
         return
 
-    conn = await asyncpg.connect(DATABASE_URL2)
-    try:
+    async with pool.acquire() as conn:
         if result == "win":
             query = """
                 INSERT INTO janken_stats (user_id, wins, losses, draws)
@@ -50,33 +46,29 @@ async def record_result(user_id: int, result: str):
                 ON CONFLICT (user_id) DO UPDATE
                 SET draws = janken_stats.draws + 1;
             """
-        await conn.execute(query, user_id)
-    finally:
-        await conn.close()
+        await conn.execute(query, user.id)
 
 
-async def get_top_rankings(limit: int = 10):
+async def get_top_rankings(pool: asyncpg.Pool, limit: int = 10):
     """
-    合計得点（勝ち3点, 引き分け2点, 負け1点）でソートしてランキングを取得する。
+    合計得点（勝ち2点, 引き分け1点, 負け-1点）でソートしてランキングを取得する。
     同点の場合は勝利数が多い順にソート。
     """
-    conn = await asyncpg.connect(DATABASE_URL2)
-    try:
+    async with pool.acquire() as conn:
         query = """
             SELECT 
                 user_id, 
                 wins, 
                 losses, 
                 draws,
-                (wins * 3 + draws * 2 + losses * 1) AS points
+                (wins * 2 + draws * 1 - losses * 1) AS points
             FROM janken_stats
             ORDER BY points DESC, wins DESC
             LIMIT $1;
         """
         rows = await conn.fetch(query, limit)
         return rows
-    finally:
-        await conn.close()
+
 
 # ----------------------------------------------------
 # じゃんけん View
@@ -88,20 +80,39 @@ class JankenView(discord.ui.View):
         challenger: discord.Member,
         opponent: discord.Member,
         is_bot: bool,
+        pool: asyncpg.Pool,
+        timeout: float = 60.0,
     ):
-        super().__init__(timeout=None)
+        super().__init__(timeout=timeout)
 
         self.challenger = challenger
         self.opponent = opponent
         self.is_bot = is_bot
+        self.pool = pool
+        self.message: discord.Message | None = None
 
         self.choices = {
             challenger.id: None,
             opponent.id: None,
         }
 
+        # Bot対戦の場合はBotの手をあらかじめランダム決定
         if is_bot:
             self.choices[opponent.id] = random.choice(list(HANDS.keys()))
+
+    async def on_timeout(self):
+        """タイムアウト（放置）時の処理"""
+        for item in self.children:
+            item.disabled = True
+        
+        if self.message:
+            try:
+                await self.message.edit(
+                    content="⏰ 制限時間（60秒）が切れたため、対戦はキャンセルされました。",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
 
     @discord.ui.button(
         label="✊ グー",
@@ -188,32 +199,25 @@ class JankenView(discord.ui.View):
                 inline=True,
             )
 
+            # ボタンを無効化
+            for item in self.children:
+                item.disabled = True
+
             # --- あいこ処理 ---
             if p1_hand == p2_hand:
                 embed.color = discord.Color.orange()
                 embed.description = (
-                    "🤔 **あいこでしょ！**\n\n引き分けです！"
-                    "続ける場合はもう一度 </janken play:1530579083002384636> を実行してください。"
-
+                    "🤔 **あいこでしょ！**\n\n引き分けです！\n"
+                    "続ける場合はもう一度 `/janken play` を実行してください。"
                 )
 
-                # DBに引き分けを記録
-                await record_result(self.challenger.id, "draw")
-                if not self.is_bot:
-                    await record_result(self.opponent.id, "draw")
+                # DBに引き分けを記録（Botは内部処理で弾かれます）
+                await record_result(self.pool, self.challenger, "draw")
+                await record_result(self.pool, self.opponent, "draw")
 
-                for item in self.children:
-                    item.disabled = True
-
-                if not interaction.response.is_done():
-                    await interaction.response.edit_message(
-                        content="引き分け！", embed=embed, view=self
-                    )
-                else:
-                    await interaction.message.edit(
-                        content="引き分け！", embed=embed, view=self
-                    )
-
+                await interaction.response.edit_message(
+                    content="引き分け！", embed=embed, view=self
+                )
                 self.stop()
                 return
 
@@ -225,32 +229,20 @@ class JankenView(discord.ui.View):
             ]
 
             if (p1_hand, p2_hand) in win_conditions:
-                winner = self.challenger
-                loser = self.opponent
+                winner, loser = self.challenger, self.opponent
             else:
-                winner = self.opponent
-                loser = self.challenger
+                winner, loser = self.opponent, self.challenger
 
             embed.color = discord.Color.green()
             embed.description = f"🎉 **勝者: {winner.mention} !!**"
 
-            # DBに勝敗を記録
-            await record_result(winner.id, "win")
-            if not (self.is_bot and loser.id == self.opponent.id):
-                await record_result(loser.id, "loss")
+            # DBに勝敗を記録（Botは内部処理で弾かれます）
+            await record_result(self.pool, winner, "win")
+            await record_result(self.pool, loser, "loss")
 
-            for item in self.children:
-                item.disabled = True
-
-            if not interaction.response.is_done():
-                await interaction.response.edit_message(
-                    content="対戦終了！", embed=embed, view=self
-                )
-            else:
-                await interaction.message.edit(
-                    content="対戦終了！", embed=embed, view=self
-                )
-
+            await interaction.response.edit_message(
+                content="対戦終了！", embed=embed, view=self
+            )
             self.stop()
 
         except Exception:
@@ -264,6 +256,16 @@ class JankenCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.pool: asyncpg.Pool | None = None
+
+    async def cog_load(self):
+        """Cog読み込み時にDB接続プールを作成"""
+        self.pool = await asyncpg.create_pool(DATABASE_URL2)
+
+    async def cog_unload(self):
+        """Cogアンロード時にプールを解放"""
+        if self.pool:
+            await self.pool.close()
 
     janken_group = app_commands.Group(
         name="janken", description="じゃんけんコマンド一覧"
@@ -317,7 +319,10 @@ class JankenCog(commands.Cog):
             )
 
             view = JankenView(
-                challenger=challenger, opponent=opponent, is_bot=is_bot
+                challenger=challenger,
+                opponent=opponent,
+                is_bot=is_bot,
+                pool=self.pool,
             )
 
             await interaction.response.send_message(
@@ -325,6 +330,8 @@ class JankenCog(commands.Cog):
                 embed=embed,
                 view=view,
             )
+            # タイムアウト処理のためにMessageオブジェクトを保持
+            view.message = await interaction.original_response()
 
         except Exception:
             traceback.print_exc()
@@ -337,7 +344,7 @@ class JankenCog(commands.Cog):
         await interaction.response.defer()
 
         try:
-            rows = await get_top_rankings(limit=10)
+            rows = await get_top_rankings(self.pool, limit=10)
 
             if not rows:
                 await interaction.followup.send(
@@ -347,7 +354,7 @@ class JankenCog(commands.Cog):
 
             embed = discord.Embed(
                 title="🏆 じゃんけんポイントランキング (TOP 10)",
-                description="※得点計算: 勝ち **3点** / 引き分け **2点** / 負け **1点**",
+                description="※得点計算: 勝ち **2点** / 引き分け **1点** / 負け **-1点**",
                 color=discord.Color.gold(),
             )
 
@@ -359,7 +366,7 @@ class JankenCog(commands.Cog):
                 draws = row["draws"]
                 points = row["points"]
 
-                member = interaction.guild.get_member(user_id)
+                member = interaction.guild.get_member(user_id) if interaction.guild else None
                 user_name = member.display_name if member else f"<@{user_id}>"
 
                 badge = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"`#{i:2d}`")
