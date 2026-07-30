@@ -73,7 +73,6 @@ class SettingsCog(commands.GroupCog, name="setting"):
 
                     with self._get_connection() as conn:
                         with conn.cursor() as cur:
-                            # BIGINT型に合わせて '0' ではなく 0 (数値) を使用
                             cur.execute(
                                 """
                                 INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels)
@@ -414,6 +413,150 @@ class SettingsCog(commands.GroupCog, name="setting"):
             current_settings["level_mention"],
             current_settings["rank_mention"],
             current_settings["eew_mention"],
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ==========================================
+    # 3. /setting reishou コマンド
+    # ==========================================
+    @app_commands.command(
+        name="reishou",
+        description="冷笑削除機能の対象チャンネルを設定します"
+    )
+    @app_commands.describe(
+        操作="実行したい操作を選択してください",
+        チャンネル="対象のテキストチャンネル（追加/削除の場合に指定）"
+    )
+    @app_commands.choices(
+        操作=[
+            app_commands.Choice(name="チャンネルを追加 (add)", value="add"),
+            app_commands.Choice(name="チャンネルを削除 (remove)", value="remove"),
+            app_commands.Choice(name="設定をリセット（全チャンネル対象化）", value="reset"),
+        ]
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    async def reishou_setting(
+        self,
+        interaction: discord.Interaction,
+        操作: str,
+        チャンネル: discord.TextChannel = None
+    ):
+        current_settings = await self._get_guild_settings(interaction.guild_id)
+        channels = current_settings["channels"]
+
+        embed = discord.Embed(color=discord.Color.blue())
+
+        if 操作 == "reset":
+            channels = []
+            embed.title = "⚙️ 冷笑削除設定をリセットしました"
+            embed.description = "すべてのチャンネルが監視対象となります。"
+
+        elif 操作 in ["add", "remove"]:
+            if not チャンネル:
+                await interaction.response.send_message(
+                    "❌ 追加・削除操作を行う場合は、`チャンネル` オプションを指定してください。",
+                    ephemeral=True
+                )
+                return
+
+            if 操作 == "add":
+                if チャンネル.id not in channels:
+                    channels.append(チャンネル.id)
+                    embed.title = "⚙️ 監視チャンネルを追加しました"
+                    embed.description = f"対象チャンネル: {チャンネル.mention}"
+                else:
+                    await interaction.response.send_message(
+                        f"⚠️ {チャンネル.mention} は既に登録されています。",
+                        ephemeral=True
+                    )
+                    return
+
+            elif 操作 == "remove":
+                if チャンネル.id in channels:
+                    channels.remove(チャンネル.id)
+                    embed.title = "⚙️ 監視チャンネルを削除しました"
+                    embed.description = f"削除したチャンネル: {チャンネル.mention}"
+                else:
+                    await interaction.response.send_message(
+                        f"⚠️ {チャンネル.mention} は登録されていません。",
+                        ephemeral=True
+                    )
+                    return
+
+        await self._save_guild_settings(
+            interaction.guild_id,
+            current_settings["quiz_timeout"],
+            current_settings["answer_timeout"],
+            channels,
+            current_settings["level_channel_id"],
+            current_settings["rank_channel_id"],
+            current_settings["eew_channel_id"],
+            current_settings["level_mention"],
+            current_settings["rank_mention"],
+            current_settings["eew_mention"],
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ==========================================
+    # 4. /setting quiz コマンド
+    # ==========================================
+    @app_commands.command(
+        name="quiz",
+        description="早押しクイズのタイムアウト時間を設定します"
+    )
+    @app_commands.describe(
+        問題制限時間_分="問題が出題されてから終了するまでの時間（分）",
+        回答制限時間_秒="ボタンを押してから回答を入力するまでの制限時間（秒）"
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    async def quiz_setting(
+        self,
+        interaction: discord.Interaction,
+        問題制限時間_分: app_commands.Range[float, 0.5, 60.0] = None,
+        回答制限時間_秒: app_commands.Range[float, 3.0, 120.0] = None
+    ):
+        if 問題制限時間_分 is None and 回答制限時間_秒 is None:
+            await interaction.response.send_message(
+                "❌ `問題制限時間_分` または `回答制限時間_秒` のどちらか一方以上を指定してください。",
+                ephemeral=True
+            )
+            return
+
+        current_settings = await self._get_guild_settings(interaction.guild_id)
+
+        quiz_timeout = current_settings["quiz_timeout"]
+        answer_timeout = current_settings["answer_timeout"]
+
+        changes = []
+        if 問題制限時間_分 is not None:
+            quiz_timeout = 問題制限時間_分 * 60.0
+            changes.append(f"• 問題制限時間: `{int(問題制限時間_分)}分` (`{int(quiz_timeout)}秒`)")
+
+        if 回答制限時間_秒 is not None:
+            answer_timeout = 回答制限時間_秒
+            changes.append(f"• 回答制限時間: `{int(回答制限時間_秒)}秒`")
+
+        await self._save_guild_settings(
+            interaction.guild_id,
+            quiz_timeout,
+            answer_timeout,
+            current_settings["channels"],
+            current_settings["level_channel_id"],
+            current_settings["rank_channel_id"],
+            current_settings["eew_channel_id"],
+            current_settings["level_mention"],
+            current_settings["rank_mention"],
+            current_settings["eew_mention"],
+        )
+
+        embed = discord.Embed(
+            title="⚙️ クイズ設定を更新しました",
+            description="\n".join(changes),
+            color=discord.Color.green()
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
