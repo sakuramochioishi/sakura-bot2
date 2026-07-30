@@ -15,7 +15,8 @@ SCALE_MAP = {
 }
 
 def parse_shindo(shindo_str: str) -> float:
-    if not shindo_str or shindo_str == "不明":
+    """震度文字列（"5弱", "5-", "6+", 60 等）を float の値に変換"""
+    if not shindo_str or str(shindo_str) in ["不明", "0", "None"]:
         return 0.0
     
     mapping = {
@@ -29,9 +30,14 @@ def parse_shindo(shindo_str: str) -> float:
     if clean_str in mapping:
         return mapping[clean_str]
     
+    # 数値形式（P2P等の 10, 20... 80）や直接の数字抽出
     match = re.search(r'\d+', clean_str)
     if match:
-        return float(match.group())
+        val = float(match.group())
+        # もし 40 や 50 などの10倍値で入ってきた場合の補正
+        if val >= 10:
+            return val / 10.0
+        return val
     return 0.0
 
 
@@ -39,6 +45,8 @@ class EEWCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.bg_task = None
+        # 連投防止用の状態管理 {EventID: last_serial_number}
+        self.processed_events = {}
 
     async def cog_load(self):
         self.bg_task = self.bot.loop.create_task(self.listen_eew())
@@ -55,53 +63,85 @@ class EEWCog(commands.Cog):
         
         while not self.bot.is_closed():
             try:
-                async with websockets.connect(WOLFX_EEW_WS) as ws:
+                # ping_interval / ping_timeout を設定してサイレント切断を防止
+                async with websockets.connect(WOLFX_EEW_WS, ping_interval=20, ping_timeout=10) as ws:
                     print("[EEWCog] WebSocket 接続成功")
                     async for message in ws:
-                        data = json.loads(message)
-                        
-                        if data.get("type") == "heartbeat" or "Shindo1" not in data:
+                        try:
+                            data = json.loads(message)
+                        except json.JSONDecodeError:
                             continue
                         
-                        max_shindo_raw = data.get("Shindo1", "0")
+                        # 心拍(heartbeat)ログまたは判定不可能なデータのスキップ
+                        if data.get("type") == "heartbeat" or data.get("type") == "ping":
+                            continue
+
+                        # Cancel 報の判定
+                        if data.get("isCancel") or data.get("Title") == "緊急地震速報（キャンセル）":
+                            continue
+
+                        # Wolfx APIの震度取得（"max_intensity" または "Shindo1" に入る）
+                        max_shindo_raw = data.get("max_intensity") or data.get("Shindo1") or "0"
                         shindo_value = parse_shindo(max_shindo_raw)
 
                         # 震度4未満はスキップ
                         if shindo_value < 4.0:
                             continue
 
-                       # setting.py から通知対象チャンネルとメンションを取得
+                        # 重複通知防止チェック（同じEventIDで同じ電文番号であればスキップ）
+                        event_id = data.get("EventID") or data.get("EventID_Raw")
+                        serial_num = data.get("Serial", 0)
+                        
+                        if event_id:
+                            if self.processed_events.get(event_id) == serial_num:
+                                continue
+                            self.processed_events[event_id] = serial_num
+                            
+                            # メモリリーク防止（履歴が100件を超えたら古いものを削除）
+                            if len(self.processed_events) > 100:
+                                self.processed_events.pop(next(iter(self.processed_events)))
+
+                        # 設定Cogから送信対象を取得
                         settings_cog = self.bot.get_cog("setting") or self.bot.get_cog("SettingsCog")
-                        if not settings_cog:
+                        if not settings_cog or not hasattr(settings_cog, "get_all_eew_targets"):
                             continue
 
-                        # [(channel_id, mention_str), ...] のタプルリストを取得
                         target_list = settings_cog.get_all_eew_targets()
                         if not target_list:
                             continue
 
-                        hypocenter = data.get("Hypocenter", "不明")
-                        mag = data.get("Magunitude", "不明")
-                        is_warn = data.get("isWarn", False)
+                        # 情報の抽出
+                        hypocenter = data.get("Hypocenter") or data.get("Title", "不明")
+                        mag = data.get("Magunitude") or data.get("Magnitude", "不明")
+                        is_warn = data.get("isWarn", False) or data.get("is_warn", False)
+                        is_final = data.get("isFinal", False)
 
-                        status = "🚨 **【緊急地震速報（警報）】**" if is_warn else "⚠️ **【緊急地震速報（予報）】**"
-                        
+                        title_type = "🚨 **【緊急地震速報（警報）】**" if is_warn else "⚠️ **【緊急地震速報（予報）】**"
+                        if is_final:
+                            title_type += " (最終報)"
+
                         embed = discord.Embed(
-                            title=f"{status} (最大震度 {max_shindo_raw})",
-                            description=f"**{hypocenter}** で地震が発生しました。",
+                            title=f"{title_type} (最大震度 {max_shindo_raw})",
+                            description=f"**{hypocenter}** 付近で地震が発生しました。",
                             color=discord.Color.red() if is_warn else discord.Color.gold()
                         )
                         embed.add_field(name="予想最大震度", value=str(max_shindo_raw), inline=True)
-                        embed.add_field(name="マグニチュード", value=f"M{mag}" if mag != "不明" else "不明", inline=True)
-                        embed.add_field(name="震源地", value=hypocenter, inline=False)
-                        embed.set_footer(text="データ提供: Wolfx API")
+                        embed.add_field(name="マグニチュード", value=f"M{mag}" if str(mag) != "不明" else "不明", inline=True)
+                        embed.add_field(name="震源地", value=str(hypocenter), inline=False)
+                        
+                        if serial_num:
+                            embed.set_footer(text=f"第 {serial_num} 報 | データ提供: Wolfx API")
+                        else:
+                            embed.set_footer(text="データ提供: Wolfx API")
 
                         for channel_id, mention_str in target_list:
                             channel = self.bot.get_channel(channel_id)
                             if channel:
                                 try:
-                                    # メンション設定があれば本文(content)に載せて送信
-                                    await channel.send(content=mention_str if mention_str else None, embed=embed)
+                                    await channel.send(
+                                        content=mention_str if mention_str else None,
+                                        embed=embed
+                                    )
                                 except Exception as send_error:
                                     print(f"[EEWCog] メッセージ送信失敗 ({channel_id}): {send_error}")
 
@@ -121,7 +161,7 @@ class EEWCog(commands.Cog):
     )
     @app_commands.guild_only()
     async def eew_history(self, interaction: discord.Interaction):
-        await interaction.response.defer()  # 取得待ちに対応
+        await interaction.response.defer()
 
         url = "https://api.p2pquake.net/v2/history?codes=551&limit=100"
 
