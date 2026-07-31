@@ -99,9 +99,9 @@ class LevelingCog(commands.Cog):
                 config = await settings_cog.get_leveling_config(guild.id)
                 if config:
                     if kind == "levelup":
-                        target_channel_id = config.get("levelup_channel_id")
+                        target_channel_id = config.get("log_levelup_channel_id")
                     elif kind == "rankup":
-                        target_channel_id = config.get("rankup_channel_id") or config.get("levelup_channel_id")
+                        target_channel_id = config.get("log_rankup_channel_id") or config.get("log_levelup_channel_id")
             except Exception as e:
                 logger.warning(f"SettingsCog からの設定取得に失敗しました: {e}")
 

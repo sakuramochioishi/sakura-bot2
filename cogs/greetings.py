@@ -95,7 +95,7 @@ class ModerationCog(commands.Cog):
             "kiti-w",
         ]
 
-    async def get_reishou_channels(self, guild_id: int) -> list[int]:
+    async def reishou_channel_id(self, guild_id: int) -> list[int]:
         """SettingsCog から対象チャンネルリストを取得する"""
         settings_cog = (
             self.bot.get_cog("SettingsCog")
@@ -106,8 +106,8 @@ class ModerationCog(commands.Cog):
             return []
 
         try:
-            if hasattr(settings_cog, "get_reishou_channels"):
-                func = getattr(settings_cog, "get_reishou_channels")
+            if hasattr(settings_cog, "reishou_channel_id"):
+                func = getattr(settings_cog, "reishou_channel_id")
                 if discord.utils.isawaitable(func(guild_id)):
                     return await func(guild_id)
                 return func(guild_id)
@@ -121,7 +121,7 @@ class ModerationCog(commands.Cog):
         if message.author.bot or not message.guild or not message.channel:
             return
 
-        allowed_channels = await self.get_reishou_channels(message.guild.id)
+        allowed_channels = await self.reishou_channel_id(message.guild.id)
 
         if not allowed_channels or (message.channel.id not in allowed_channels):
             return
