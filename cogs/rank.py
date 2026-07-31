@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+import inspect
 import logging
 import os
 import random
@@ -70,23 +71,40 @@ class Leveling(commands.Cog):
                 return rank_name, color
         return "🔰 Novice（駆け出し）", discord.Color.green()
 
-    def get_notification_channel(
+    async def get_notification_channel(
         self, guild: discord.Guild, origin_channel: discord.TextChannel, kind: str
     ) -> discord.TextChannel:
-        """setting Cogから指定された通知先チャンネルを取得し、未設定・取得不可の場合は元のチャンネルを返す"""
-        settings_cog = self.bot.get_cog("setting")
+        """setting Cogからの設定値取得を安全に行い、失敗した場合は送信元チャンネルにフォールバックする"""
+        settings_cog = self.bot.get_cog("setting") or self.bot.get_cog("Setting")
         if not settings_cog:
             return origin_channel
 
         target_channel_id = None
-        if kind == "level":
-            target_channel_id = getattr(settings_cog, "get_level_channel_id", lambda g: None)(guild.id)
-        elif kind == "rank":
-            target_channel_id = getattr(settings_cog, "get_rank_channel_id", lambda g: None)(guild.id)
+        try:
+            # kind に応じたメソッド名の候補を複数検索して安全に呼び出し
+            method_name = f"get_{kind}_channel_id"
+            if hasattr(settings_cog, method_name):
+                func = getattr(settings_cog, method_name)
+                if inspect.iscoroutinefunction(func):
+                    target_channel_id = await func(guild.id)
+                else:
+                    target_channel_id = func(guild.id)
+            elif hasattr(settings_cog, "get_channel_id"):
+                func = getattr(settings_cog, "get_channel_id")
+                if inspect.iscoroutinefunction(func):
+                    target_channel_id = await func(guild.id, kind)
+                else:
+                    target_channel_id = func(guild.id, kind)
+        except Exception as e:
+            logger.warning(f"Setting Cog からのチャンネルID取得中にエラーが発生しました ({kind}): {e}")
 
         if target_channel_id:
-            target_channel = guild.get_channel(target_channel_id)
-            if target_channel and isinstance(target_channel, discord.TextChannel) and target_channel.permissions_for(guild.me).send_messages:
+            target_channel = guild.get_channel(int(target_channel_id))
+            if (
+                target_channel
+                and isinstance(target_channel, discord.TextChannel)
+                and target_channel.permissions_for(guild.me).send_messages
+            ):
                 return target_channel
 
         return origin_channel
@@ -127,7 +145,7 @@ class Leveling(commands.Cog):
     async def update_user_roles(
         self, member: discord.Member, new_level: int
     ) -> bool:
-        """レベルに応じて発言ランクロールを自動付与・付け替え（ランクが上昇した場合はTrueを返す）"""
+        """レベルに応じて発言ランクロールを自動付与・付け替え（ランクが変化した場合はTrueを返す）"""
         guild = member.guild
         if not guild.me.guild_permissions.manage_roles:
             return False
@@ -146,13 +164,13 @@ class Leveling(commands.Cog):
 
         is_rank_changed = False
         try:
-            # 必要な場合のみロール削除 API を呼び出す
+            # 古いランクの削除
             if roles_to_remove:
                 await member.remove_roles(
                     *roles_to_remove, reason="レベルアップに伴う旧ランクの削除"
                 )
 
-            # ターゲットロールをまだ持っていない場合のみ付与 API を呼び出す
+            # 新ランクの付与（所有していない場合のみ）
             if target_role and target_role not in member.roles:
                 await member.add_roles(
                     target_role, reason="レベルアップに伴う新ランクの付与"
@@ -190,84 +208,95 @@ class Leveling(commands.Cog):
         user_id = message.author.id
         now = datetime.now(timezone.utc)
 
-        async with self.db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT xp, level, last_message_at 
-                FROM user_levels 
-                WHERE guild_id = $1 AND user_id = $2
-            """,
-                guild_id,
-                user_id,
-            )
+        try:
+            async with self.db_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT xp, level, last_message_at 
+                    FROM user_levels 
+                    WHERE guild_id = $1 AND user_id = $2
+                """,
+                    guild_id,
+                    user_id,
+                )
 
-            # 30秒のクールダウンチェック
-            if row and row["last_message_at"]:
-                delta = (now - row["last_message_at"]).total_seconds()
-                if delta < 30:
-                    return
+                # 30秒のクールダウンチェック
+                if row and row["last_message_at"]:
+                    delta = (now - row["last_message_at"]).total_seconds()
+                    if delta < 30:
+                        return
 
-            current_xp = row["xp"] if row else 0
-            current_level = row["level"] if row else 1
+                current_xp = row["xp"] if row else 0
+                current_level = row["level"] if row else 1
 
-            added_xp = random.randint(10, 30)
-            new_xp = current_xp + added_xp
-            new_level = self.calculate_level(new_xp)
+                added_xp = random.randint(10, 30)
+                new_xp = current_xp + added_xp
+                new_level = self.calculate_level(new_xp)
 
-            await conn.execute(
-                """
-                INSERT INTO user_levels (guild_id, user_id, xp, level, last_message_at)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (guild_id, user_id) 
-                DO UPDATE SET 
-                    xp = EXCLUDED.xp,
-                    level = EXCLUDED.level,
-                    last_message_at = EXCLUDED.last_message_at
-            """,
-                guild_id,
-                user_id,
-                new_xp,
-                new_level,
-                now,
-            )
+                await conn.execute(
+                    """
+                    INSERT INTO user_levels (guild_id, user_id, xp, level, last_message_at)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (guild_id, user_id) 
+                    DO UPDATE SET 
+                        xp = EXCLUDED.xp,
+                        level = EXCLUDED.level,
+                        last_message_at = EXCLUDED.last_message_at
+                """,
+                    guild_id,
+                    user_id,
+                    new_xp,
+                    new_level,
+                    now,
+                )
 
-            # レベルアップ時の処理
-            if new_level > current_level:
-                rank_name, _ = self.get_rank_info(new_level)
+                # レベルアップ時の処理
+                if new_level > current_level:
+                    rank_name, _ = self.get_rank_info(new_level)
 
-                # レベルアップ通知チャンネルを取得して送信
-                if isinstance(message.channel, discord.TextChannel):
-                    level_channel = self.get_notification_channel(
-                        message.guild, message.channel, kind="level"
-                    )
-                    
-                    # メンションで通知音が鳴らないよう allowed_mentions を指定
-                    await level_channel.send(
-                        f"🎉 {message.author.mention} が **Lv.{new_level}** にレベルアップ！\n"
-                        f"現在の発言ランク: **{rank_name}**",
-                        allowed_mentions=discord.AllowedMentions(users=False)
-                    )
-
-                # ロール更新とランクアップチェック
-                if isinstance(message.author, discord.Member):
-                    is_rank_changed = await self.update_user_roles(
-                        message.author, new_level
-                    )
-
-                    # ランクアップ（新しい称号ロールが付与された）時の別通知処理
-                    if is_rank_changed and isinstance(message.channel, discord.TextChannel):
-                        rank_channel = self.get_notification_channel(
-                            message.guild, message.channel, kind="rank"
+                    # レベルアップ通知チャンネルを取得して送信
+                    if isinstance(message.channel, discord.TextChannel):
+                        level_channel = await self.get_notification_channel(
+                            message.guild, message.channel, kind="level"
                         )
-                        embed = discord.Embed(
-                            title="👑 RANK UP!",
-                            description=f"{message.author.mention} が新しいランク **【{rank_name}】** に昇格しました！",
-                            color=discord.Color.purple(),
+
+                        try:
+                            # メンション通知の送信
+                            await level_channel.send(
+                                f"🎉 {message.author.mention} が **Lv.{new_level}** にレベルアップ！\n"
+                                f"現在の発言ランク: **{rank_name}**",
+                                allowed_mentions=discord.AllowedMentions(users=False),
+                            )
+                        except discord.Forbidden:
+                            logger.warning(f"[{message.guild.name}] チャンネル {level_channel.name} への送信権限がありません。")
+
+                    # ロール更新とランクアップチェック
+                    if isinstance(message.author, discord.Member):
+                        prev_rank_name, _ = self.get_rank_info(current_level)
+                        is_rank_changed = await self.update_user_roles(
+                            message.author, new_level
                         )
-                        await rank_channel.send(
-                            embed=embed,
-                            allowed_mentions=discord.AllowedMentions(users=False)
-                        )
+
+                        # ランク帯自体が上がった（称号が変わった）場合の別通知処理
+                        if (prev_rank_name != rank_name or is_rank_changed) and isinstance(message.channel, discord.TextChannel):
+                            rank_channel = await self.get_notification_channel(
+                                message.guild, message.channel, kind="rank"
+                            )
+                            embed = discord.Embed(
+                                title="👑 RANK UP!",
+                                description=f"{message.author.mention} が新しいランク **【{rank_name}】** に昇格しました！",
+                                color=discord.Color.purple(),
+                            )
+                            try:
+                                await rank_channel.send(
+                                    embed=embed,
+                                    allowed_mentions=discord.AllowedMentions(users=False),
+                                )
+                            except discord.Forbidden:
+                                logger.warning(f"[{message.guild.name}] チャンネル {rank_channel.name} への送信権限がありません。")
+
+        except Exception as e:
+            logger.error(f"on_message の処理中にエラーが発生しました: {e}", exc_info=True)
 
     # --- /level コマンド ---
     @app_commands.command(
