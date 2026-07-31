@@ -1,520 +1,408 @@
-from __future__ import annotations
-
-import asyncio
-import json
 import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-import psycopg2
 from dotenv import load_dotenv
+import asyncpg
+import logging
 
+logger = logging.getLogger(__name__)
+
+# ==========================================
+# 1. 環境変数の読み込み (.env)
+# ==========================================
 load_dotenv()
+
 DATABASE_URL = os.getenv("DATABASE_URL")
-SETTINGS_FILE = "bot_config.json"
+
+# ==========================================
+# 2. テーブル作成用 SQL
+# ==========================================
+CREATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS guild_settings (
+    guild_id BIGINT PRIMARY KEY,
+    
+    -- LevelingCog 連携用
+    log_levelup_channel_id BIGINT,
+    log_rankup_channel_id BIGINT,
+    leveling_enabled BOOLEAN DEFAULT TRUE,
+    
+    -- QuizCog 連携用
+    quiz_answer_time INT DEFAULT 30,
+    quiz_time_limit INT DEFAULT 60,
+    quiz_channel_id BIGINT,
+    
+    -- ModerationCog 連携用
+    reishou_channel_id BIGINT,
+    mod_log_channel_id BIGINT,
+    auto_mod_enabled BOOLEAN DEFAULT TRUE,
+    
+    -- EEWCog 連携用
+    eew_channel_id BIGINT,
+    
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# ==========================================
+# 3. スタンドアロン型ヘルパー関数
+# ==========================================
+async def get_guild_settings(pool: asyncpg.Pool, guild_id: int) -> dict | None:
+    """指定したサーバーの設定を辞書形式で取得する関数（汎用）"""
+    if not pool:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM guild_settings WHERE guild_id = $1", guild_id
+        )
+        return dict(row) if row else None
 
 
-class SettingsCog(commands.GroupCog, name="setting"):
+class SettingsCog(commands.Cog):
+    """設定管理用 Cog (LevelingCog, QuizCog, ModerationCog, EEWCog 連携)"""
 
     def __init__(self, bot: commands.Bot):
-        super().__init__()
         self.bot = bot
 
-    async def cog_load(self):
-        """Cog読み込み時に非同期でDB初期化および移行を実施"""
-        await asyncio.to_thread(self._init_db)
-        await asyncio.to_thread(self._migrate_json_to_db)
+    @property
+    def db(self) -> asyncpg.Pool:
+        return getattr(self.bot, "db_pool", None)
 
-    def _get_connection(self):
-        """DB接続を取得するヘルパー"""
-        return psycopg2.connect(DATABASE_URL)
+    # ==================================================
+    # 🤝 各 Cog 連携用インターフェース (Getter メソッド)
+    # ==================================================
 
-    def _init_db(self):
-        """データベースに設定保存用のテーブルを作成し、必要なカラムを保証する"""
-        conn = self._get_connection()
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS guild_settings (
-                            guild_id BIGINT PRIMARY KEY,
-                            quiz_timeout TEXT DEFAULT '900.0',
-                            answer_timeout TEXT DEFAULT '15.0',
-                            channels TEXT[] DEFAULT '{}'::TEXT[],
-                            level_channel_id BIGINT DEFAULT NULL,
-                            rank_channel_id BIGINT DEFAULT NULL,
-                            eew_channel_id BIGINT DEFAULT NULL
-                        );
-                    """)
+    async def get_setting(self, guild_id: int) -> dict | None:
+        """指定ギルドの全設定を取得"""
+        return await get_guild_settings(self.db, guild_id)
 
-                    # カラムが存在しない場合の安全な追加
-                    cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS quiz_timeout TEXT DEFAULT '900.0';")
-                    cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS answer_timeout TEXT DEFAULT '15.0';")
-                    cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS channels TEXT[] DEFAULT '{}'::TEXT[];")
-                    cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS level_channel_id BIGINT DEFAULT NULL;")
-                    cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS rank_channel_id BIGINT DEFAULT NULL;")
-                    cur.execute("ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_channel_id BIGINT DEFAULT NULL;")
-        finally:
-            conn.close()
-
-    def _migrate_json_to_db(self):
-        """古い bot_config.json があれば、自動的にデータベースへ移行する"""
-        if os.path.exists(SETTINGS_FILE):
-            try:
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                    old_data = json.load(f)
-
-                if old_data:
-                    quiz_timeout = str(old_data.get("quiz", {}).get("quiz_timeout", 900.0))
-                    answer_timeout = str(old_data.get("quiz", {}).get("answer_timeout", 15.0))
-                    channels = [str(cid) for cid in old_data.get("reishou", {}).get("channels", [])]
-
-                    conn = self._get_connection()
-                    try:
-                        with conn:
-                            with conn.cursor() as cur:
-                                cur.execute(
-                                    """
-                                    INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels)
-                                    VALUES (0, %s, %s, %s)
-                                    ON CONFLICT (guild_id) DO NOTHING;
-                                """,
-                                    (quiz_timeout, answer_timeout, channels),
-                                )
-                        print("⚙️ 【移行完了】設定JSONデータをデータベースに引っ越ししました！")
-                    finally:
-                        conn.close()
-
-                os.rename(SETTINGS_FILE, f"{SETTINGS_FILE}.bak")
-                print(f"📦 古い設定ファイルを {SETTINGS_FILE}.bak に退避しました。")
-            except Exception as e:
-                print(f"⚠️ 設定JSONの移行中にエラーが発生しました: {e}")
-
-    def _get_guild_settings_sync(self, guild_id: int) -> dict:
-        """指定されたギルドの設定を取得する（同期処理）"""
-        conn = self._get_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id
-                    FROM guild_settings WHERE guild_id = %s;
-                """,
-                    (guild_id,),
-                )
-                row = cur.fetchone()
-
-                if row is None:
-                    # デフォルト行(guild_id=0)を取得
-                    cur.execute(
-                        "SELECT quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id FROM guild_settings WHERE guild_id = 0;"
-                    )
-                    default_row = cur.fetchone()
-
-                    if default_row:
-                        quiz_t, answer_t, chs, l_ch, r_ch, e_ch = default_row
-                    else:
-                        quiz_t, answer_t, chs, l_ch, r_ch, e_ch = (
-                            "900.0", "15.0", [], None, None, None
-                        )
-
-                    with conn:
-                        cur.execute(
-                            """
-                            INSERT INTO guild_settings (guild_id, quiz_timeout, answer_timeout, channels, level_channel_id, rank_channel_id, eew_channel_id)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (guild_id) DO NOTHING;
-                        """,
-                            (guild_id, quiz_t, answer_t, chs, l_ch, r_ch, e_ch),
-                        )
-                    row = (quiz_t, answer_t, chs, l_ch, r_ch, e_ch)
-
+    # 1. LevelingCog 連携用
+    async def get_leveling_config(self, guild_id: int) -> dict:
+        """LevelingCogが必要とする設定項目を取得"""
+        settings = await self.get_setting(guild_id)
+        if not settings:
             return {
-                "quiz_timeout": float(row[0]) if row[0] else 900.0,
-                "answer_timeout": float(row[1]) if row[1] else 15.0,
-                "channels": [int(cid) for cid in row[2]] if row[2] else [],
-                "level_channel_id": int(row[3]) if row[3] is not None else None,
-                "rank_channel_id": int(row[4]) if row[4] is not None else None,
-                "eew_channel_id": int(row[5]) if row[5] is not None else None,
+                "levelup_channel_id": None,
+                "rankup_channel_id": None,
+                "enabled": True,
             }
-        finally:
-            conn.close()
+        return {
+            "levelup_channel_id": settings.get("log_levelup_channel_id"),
+            "rankup_channel_id": settings.get("log_rankup_channel_id"),
+            "enabled": settings.get("leveling_enabled", True),
+        }
 
-    async def _get_guild_settings(self, guild_id: int) -> dict:
-        """非同期ラッパー"""
-        return await asyncio.to_thread(self._get_guild_settings_sync, guild_id)
+    # 2. QuizCog 連携用
+    async def get_quiz_config(self, guild_id: int) -> dict:
+        """QuizCogが必要とする設定項目を取得"""
+        settings = await self.get_setting(guild_id)
+        if not settings:
+            return {
+                "answer_time": 30,
+                "time_limit": 60,
+                "quiz_channel_id": None,
+            }
+        return {
+            "answer_time": settings.get("quiz_answer_time", 30),
+            "time_limit": settings.get("quiz_time_limit", 60),
+            "quiz_channel_id": settings.get("quiz_channel_id"),
+        }
 
-    def _save_guild_settings_sync(
-        self,
-        guild_id: int,
-        quiz_timeout: float,
-        answer_timeout: float,
-        channels: list[int],
-        level_channel_id: int | None,
-        rank_channel_id: int | None,
-        eew_channel_id: int | None,
-    ):
-        """指定されたギルドの設定を保存する（同期処理）"""
-        channels_str_list = [str(cid) for cid in channels]
+    # 3. ModerationCog 連携用
+    async def get_moderation_config(self, guild_id: int) -> dict:
+        """ModerationCogが必要とする設定項目を取得"""
+        settings = await self.get_setting(guild_id)
+        if not settings:
+            return {
+                "reishou_channel_id": None,
+                "mod_log_channel_id": None,
+                "auto_mod_enabled": True,
+            }
+        return {
+            "reishou_channel_id": settings.get("reishou_channel_id"),
+            "mod_log_channel_id": settings.get("mod_log_channel_id"),
+            "auto_mod_enabled": settings.get("auto_mod_enabled", True),
+        }
 
-        conn = self._get_connection()
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO guild_settings (
-                            guild_id, quiz_timeout, answer_timeout, channels, 
-                            level_channel_id, rank_channel_id, eew_channel_id
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (guild_id) DO UPDATE SET
-                            quiz_timeout = EXCLUDED.quiz_timeout,
-                            answer_timeout = EXCLUDED.answer_timeout,
-                            channels = EXCLUDED.channels,
-                            level_channel_id = EXCLUDED.level_channel_id,
-                            rank_channel_id = EXCLUDED.rank_channel_id,
-                            eew_channel_id = EXCLUDED.eew_channel_id;
-                    """,
-                        (
-                            guild_id,
-                            str(quiz_timeout),
-                            str(answer_timeout),
-                            channels_str_list,
-                            level_channel_id,
-                            rank_channel_id,
-                            eew_channel_id,
-                        ),
-                    )
-        finally:
-            conn.close()
-
-    async def _save_guild_settings(self, *args, **kwargs):
-        """非同期ラッパー"""
-        await asyncio.to_thread(self._save_guild_settings_sync, *args, **kwargs)
-
-    # ==========================================
-    # 👥 他のCogから呼び出すヘルパーメソッド
-    # ==========================================
-    async def get_quiz_timeout(self, guild_id: int) -> float:
-        settings = await self._get_guild_settings(guild_id)
-        return settings["quiz_timeout"]
-
-    async def get_answer_timeout(self, guild_id: int) -> float:
-        settings = await self._get_guild_settings(guild_id)
-        return settings["answer_timeout"]
-
-    async def is_reishou_target(self, guild_id: int, channel_id: int) -> bool:
-        settings = await self._get_guild_settings(guild_id)
-        channels = settings["channels"]
-        if not channels:
-            return True
-        return channel_id in channels
-
-    async def get_level_info(self, guild_id: int) -> int | None:
-        s = await self._get_guild_settings(guild_id)
-        return s["level_channel_id"]
-
-    async def get_rank_info(self, guild_id: int) -> int | None:
-        s = await self._get_guild_settings(guild_id)
-        return s["rank_channel_id"]
-
+    # 4. EEWCog 連携用
     async def get_all_eew_targets(self) -> list[int]:
-        def fetch():
-            conn = self._get_connection()
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT eew_channel_id FROM guild_settings WHERE eew_channel_id IS NOT NULL;")
-                    rows = cur.fetchall()
-                return [int(row[0]) for row in rows if row[0]]
-            finally:
-                conn.close()
-
-        return await asyncio.to_thread(fetch)
-
-    # ==========================================
-    # 1. /setting status コマンド
-    # ==========================================
-    @app_commands.command(name="status", description="Botの現在の設定状況を確認します")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(administrator=True)
-    async def status(self, interaction: discord.Interaction):
-        current_settings = await self._get_guild_settings(interaction.guild_id)
-
-        # 冷笑削除チャンネルのチェックとクリーンアップ
-        channels_list = current_settings["channels"]
-        active_channels = []
-        valid_ids = []
-
-        for cid in channels_list:
-            channel = interaction.guild.get_channel(cid)
-            if channel:
-                active_channels.append(channel.mention)
-                valid_ids.append(cid)
-
-        if len(channels_list) != len(valid_ids):
-            await self._save_guild_settings(
-                interaction.guild_id,
-                current_settings["quiz_timeout"],
-                current_settings["answer_timeout"],
-                valid_ids,
-                current_settings["level_channel_id"],
-                current_settings["rank_channel_id"],
-                current_settings["eew_channel_id"],
-            )
-            current_settings["channels"] = valid_ids
-
-        channel_text = (
-            "\n".join(f"• {ch}" for ch in active_channels)
-            if active_channels
-            else "❌ 対象チャンネル未登録（※未登録の場合は全チャンネル対象）"
-        )
-
-        level_ch = interaction.guild.get_channel(current_settings["level_channel_id"]) if current_settings["level_channel_id"] else None
-        rank_ch = interaction.guild.get_channel(current_settings["rank_channel_id"]) if current_settings["rank_channel_id"] else None
-        eew_ch = interaction.guild.get_channel(current_settings["eew_channel_id"]) if current_settings["eew_channel_id"] else None
-
-        level_text = level_ch.mention if level_ch else "未設定"
-        rank_text = rank_ch.mention if rank_ch else "未設定"
-        eew_text = eew_ch.mention if eew_ch else "未設定（※通知されません）"
-
-        q_timeout_min = current_settings["quiz_timeout"] / 60.0
-        q_timeout_str = f"{q_timeout_min:.1f}".rstrip('0').rstrip('.')
-        a_timeout_sec = int(current_settings["answer_timeout"])
-
-        embed = discord.Embed(title="⚙️ Bot 現在の設定状況", color=discord.Color.blue())
-        embed.add_field(
-            name="📢 通知用チャンネル設定",
-            value=f"• レベルアップ通知: {level_text}\n• ランクアップ通知: {rank_text}\n• 地震速報(震度4以上): {eew_text}",
-            inline=False,
-        )
-        embed.add_field(
-            name="🛡️ 冷笑削除：対象チャンネル",
-            value=channel_text,
-            inline=False,
-        )
-        embed.add_field(
-            name="❓ 早押しクイズ設定",
-            value=f"• 問題制限時間: `{q_timeout_str}分`\n• 回答制限時間: `{a_timeout_sec}秒`",
-            inline=False,
-        )
-        embed.set_footer(text="管理者のみ /setting から変更可能です")
-
-        await interaction.response.send_message(embed=embed)
-
-    # ==========================================
-    # 2. /setting notification コマンド
-    # ==========================================
-    @app_commands.command(
-        name="notification",
-        description="各種通知の送信先チャンネルを設定します",
-    )
-    @app_commands.describe(
-        種類="設定する通知の種類を選択してください",
-        チャンネル="通知を送りたいチャンネル（指定しない場合は設定を解除します）",
-    )
-    @app_commands.choices(
-        種類=[
-            app_commands.Choice(name="レベルアップ通知 (level)", value="level"),
-            app_commands.Choice(name="ランクアップ通知 (rank)", value="rank"),
-            app_commands.Choice(name="緊急地震速報 (eew)", value="eew"),
-        ],
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(administrator=True)
-    async def notification_setting(
-        self,
-        interaction: discord.Interaction,
-        種類: str,
-        チャンネル: discord.TextChannel = None,
-    ):
-        current_settings = await self._get_guild_settings(interaction.guild_id)
-
-        target_id = チャンネル.id if チャンネル else None
-
-        embed = discord.Embed(
-            title="⚙️ 通知設定を更新しました",
-            color=discord.Color.green(),
-        )
-
-        if 種類 == "level":
-            current_settings["level_channel_id"] = target_id
-            msg = (
-                f"送信先: {チャンネル.mention}"
-                if チャンネル
-                else "レベルアップ通知の送信先設定を解除しました。"
-            )
-            embed.add_field(name="📈 レベルアップ通知", value=msg, inline=False)
-
-        elif 種類 == "rank":
-            current_settings["rank_channel_id"] = target_id
-            msg = (
-                f"送信先: {チャンネル.mention}"
-                if チャンネル
-                else "ランクアップ通知の送信先設定を解除しました。"
-            )
-            embed.add_field(name="👑 ランクアップ通知", value=msg, inline=False)
-
-        elif 種類 == "eew":
-            current_settings["eew_channel_id"] = target_id
-            msg = (
-                f"送信先: {チャンネル.mention}"
-                if チャンネル
-                else "地震速報の通知先設定を解除しました。"
-            )
-            embed.add_field(name="🚨 緊急地震速報", value=msg, inline=False)
-
-        await self._save_guild_settings(
-            interaction.guild_id,
-            current_settings["quiz_timeout"],
-            current_settings["answer_timeout"],
-            current_settings["channels"],
-            current_settings["level_channel_id"],
-            current_settings["rank_channel_id"],
-            current_settings["eew_channel_id"],
-        )
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ==========================================
-    # 3. /setting reishou コマンド
-    # ==========================================
-    @app_commands.command(
-        name="reishou",
-        description="冷笑削除機能の対象チャンネルを設定します"
-    )
-    @app_commands.describe(
-        操作="実行したい操作を選択してください",
-        チャンネル="対象のテキストチャンネル（追加/削除の場合に指定）"
-    )
-    @app_commands.choices(
-        操作=[
-            app_commands.Choice(name="チャンネルを追加 (add)", value="add"),
-            app_commands.Choice(name="チャンネルを削除 (remove)", value="remove"),
-            app_commands.Choice(name="設定をリセット（全チャンネル対象化）", value="reset"),
-        ]
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(administrator=True)
-    async def reishou_setting(
-        self,
-        interaction: discord.Interaction,
-        操作: str,
-        チャンネル: discord.TextChannel = None
-    ):
-        current_settings = await self._get_guild_settings(interaction.guild_id)
-        channels = current_settings["channels"]
-
-        embed = discord.Embed(color=discord.Color.blue())
-
-        if 操作 == "reset":
-            channels = []
-            embed.title = "⚙️ 冷笑削除設定をリセットしました"
-            embed.description = "すべてのチャンネルが監視対象となります。"
-
-        elif 操作 in ["add", "remove"]:
-            if not チャンネル:
-                await interaction.response.send_message(
-                    "❌ 追加・削除操作を行う場合は、`チャンネル` オプションを指定してください。",
-                    ephemeral=True
+        """地震速報送信対象のチャンネルIDリストを取得"""
+        if not self.db:
+            return []
+        try:
+            async with self.db.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT eew_channel_id FROM guild_settings WHERE eew_channel_id IS NOT NULL"
                 )
-                return
+                return [row["eew_channel_id"] for row in rows]
+        except Exception as e:
+            logger.error(f"[SettingsCog] EEW送信先の取得失敗: {e}")
+            return []
 
-            if 操作 == "add":
-                if チャンネル.id not in channels:
-                    channels.append(チャンネル.id)
-                    embed.title = "⚙️ 監視チャンネルを追加しました"
-                    embed.description = f"対象チャンネル: {チャンネル.mention}"
-                else:
-                    await interaction.response.send_message(
-                        f"⚠️ {チャンネル.mention} は既に登録されています。",
-                        ephemeral=True
-                    )
-                    return
+    # ==================================================
+    # 🎛️ Slash Commands (/setting ...)
+    # ==================================================
+    setting_group = app_commands.Group(
+        name="setting", description="Botの各種設定を行います"
+    )
 
-            elif 操作 == "remove":
-                if チャンネル.id in channels:
-                    channels.remove(チャンネル.id)
-                    embed.title = "⚙️ 監視チャンネルを削除しました"
-                    embed.description = f"削除したチャンネル: {チャンネル.mention}"
-                else:
-                    await interaction.response.send_message(
-                        f"⚠️ {チャンネル.mention} は登録されていません。",
-                        ephemeral=True
-                    )
-                    return
-
-        await self._save_guild_settings(
-            interaction.guild_id,
-            current_settings["quiz_timeout"],
-            current_settings["answer_timeout"],
-            channels,
-            current_settings["level_channel_id"],
-            current_settings["rank_channel_id"],
-            current_settings["eew_channel_id"],
-        )
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ==========================================
-    # 4. /setting quiz コマンド
-    # ==========================================
-    @app_commands.command(
-        name="quiz",
-        description="早押しクイズのタイムアウト時間を設定します"
+    # --------------------------------------------------
+    # /setting leveling (LevelingCog 用)
+    # --------------------------------------------------
+    @setting_group.command(
+        name="leveling", description="レベル・ランクアップ通知や有効化を設定します"
     )
     @app_commands.describe(
-        問題制限時間_分="問題が出題されてから終了するまでの時間（分）",
-        回答制限時間_秒="ボタンを押してから回答を入力するまでの制限時間（秒）"
+        levelup_channel="レベルアップ通知先のチャンネル",
+        rankup_channel="ランクアップ通知先のチャンネル",
+        enabled="レベル機能を有効にするか",
     )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(administrator=True)
-    async def quiz_setting(
+    async def setting_leveling(
         self,
         interaction: discord.Interaction,
-        問題制限時間_分: app_commands.Range[float, 0.5, 60.0] = None,
-        回答制限時間_秒: app_commands.Range[float, 3.0, 120.0] = None
+        levelup_channel: discord.TextChannel = None,
+        rankup_channel: discord.TextChannel = None,
+        enabled: bool = None,
     ):
-        if 問題制限時間_分 is None and 回答制限時間_秒 is None:
+        if levelup_channel is None and rankup_channel is None and enabled is None:
             await interaction.response.send_message(
-                "❌ `問題制限時間_分` または `回答制限時間_秒` のどちらか一方以上を指定してください。",
-                ephemeral=True
+                "設定変更する項目を少なくとも1つ指定してください。",
+                ephemeral=True,
             )
             return
 
-        current_settings = await self._get_guild_settings(interaction.guild_id)
+        async with self.db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id, log_levelup_channel_id, log_rankup_channel_id, leveling_enabled
+                )
+                VALUES ($1, $2, $3, COALESCE($4, TRUE))
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    log_levelup_channel_id = COALESCE($2, guild_settings.log_levelup_channel_id),
+                    log_rankup_channel_id = COALESCE($3, guild_settings.log_rankup_channel_id),
+                    leveling_enabled = COALESCE($4, guild_settings.leveling_enabled),
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                interaction.guild_id,
+                levelup_channel.id if levelup_channel else None,
+                rankup_channel.id if rankup_channel else None,
+                enabled,
+            )
 
-        quiz_timeout = current_settings["quiz_timeout"]
-        answer_timeout = current_settings["answer_timeout"]
+        msg = "レベル機能の設定を更新しました:\n"
+        if levelup_channel:
+            msg += f"- レベルアップ通知先: {levelup_channel.mention}\n"
+        if rankup_channel:
+            msg += f"- ランクアップ通知先: {rankup_channel.mention}\n"
+        if enabled is not None:
+            msg += f"- レベル機能状態: {'有効' if enabled else '無効'}\n"
 
-        changes = []
-        if 問題制限時間_分 is not None:
-            quiz_timeout = 問題制限時間_分 * 60.0
-            q_str = f"{問題制限時間_分:.1f}".rstrip('0').rstrip('.')
-            changes.append(f"• 問題制限時間: `{q_str}分` (`{int(quiz_timeout)}秒`)")
+        await interaction.response.send_message(msg, ephemeral=True)
 
-        if 回答制限時間_秒 is not None:
-            answer_timeout = 回答制限時間_秒
-            changes.append(f"• 回答制限時間: `{int(回答制限時間_秒)}秒`")
+    # --------------------------------------------------
+    # /setting quiz (QuizCog 用)
+    # --------------------------------------------------
+    @setting_group.command(
+        name="quiz", description="クイズの制限時間や専用チャンネルを設定します"
+    )
+    @app_commands.describe(
+        answer_time="回答受付時間（秒）",
+        time_limit="全体制限時間（秒）",
+        quiz_channel="クイズ実施専用チャンネル",
+    )
+    async def setting_quiz(
+        self,
+        interaction: discord.Interaction,
+        answer_time: int = None,
+        time_limit: int = None,
+        quiz_channel: discord.TextChannel = None,
+    ):
+        if answer_time is None and time_limit is None and quiz_channel is None:
+            await interaction.response.send_message(
+                "設定変更する項目を少なくとも1つ指定してください。",
+                ephemeral=True,
+            )
+            return
 
-        await self._save_guild_settings(
-            interaction.guild_id,
-            quiz_timeout,
-            answer_timeout,
-            current_settings["channels"],
-            current_settings["level_channel_id"],
-            current_settings["rank_channel_id"],
-            current_settings["eew_channel_id"],
+        async with self.db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id, quiz_answer_time, quiz_time_limit, quiz_channel_id
+                )
+                VALUES ($1, COALESCE($2, 30), COALESCE($3, 60), $4)
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    quiz_answer_time = COALESCE($2, guild_settings.quiz_answer_time),
+                    quiz_time_limit = COALESCE($3, guild_settings.quiz_time_limit),
+                    quiz_channel_id = COALESCE($4, guild_settings.quiz_channel_id),
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                interaction.guild_id,
+                answer_time,
+                time_limit,
+                quiz_channel.id if quiz_channel else None,
+            )
+
+        msg = "クイズの設定を更新しました:\n"
+        if answer_time is not None:
+            msg += f"- 回答受付時間: {answer_time}秒\n"
+        if time_limit is not None:
+            msg += f"- 全体制限時間: {time_limit}秒\n"
+        if quiz_channel:
+            msg += f"- 専用チャンネル: {quiz_channel.mention}\n"
+
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    # --------------------------------------------------
+    # /setting moderation (ModerationCog 用)
+    # --------------------------------------------------
+    @setting_group.command(
+        name="moderation", description="モデレーション・冷笑削除・ログチャンネルを設定します"
+    )
+    @app_commands.describe(
+        reishou_channel="冷笑自動削除を適用するチャンネル",
+        mod_log_channel="モデレーションログの送信先チャンネル",
+        auto_mod="自動モデレーションを有効にするか",
+    )
+    async def setting_moderation(
+        self,
+        interaction: discord.Interaction,
+        reishou_channel: discord.TextChannel = None,
+        mod_log_channel: discord.TextChannel = None,
+        auto_mod: bool = None,
+    ):
+        if reishou_channel is None and mod_log_channel is None and auto_mod is None:
+            await interaction.response.send_message(
+                "設定変更する項目を少なくとも1つ指定してください。",
+                ephemeral=True,
+            )
+            return
+
+        async with self.db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO guild_settings (
+                    guild_id, reishou_channel_id, mod_log_channel_id, auto_mod_enabled
+                )
+                VALUES ($1, $2, $3, COALESCE($4, TRUE))
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    reishou_channel_id = COALESCE($2, guild_settings.reishou_channel_id),
+                    mod_log_channel_id = COALESCE($3, guild_settings.mod_log_channel_id),
+                    auto_mod_enabled = COALESCE($4, guild_settings.auto_mod_enabled),
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                interaction.guild_id,
+                reishou_channel.id if reishou_channel else None,
+                mod_log_channel.id if mod_log_channel else None,
+                auto_mod,
+            )
+
+        msg = "モデレーション設定を更新しました:\n"
+        if reishou_channel:
+            msg += f"- 冷笑削除チャンネル: {reishou_channel.mention}\n"
+        if mod_log_channel:
+            msg += f"- モデレーションログ: {mod_log_channel.mention}\n"
+        if auto_mod is not None:
+            msg += f"- 自動モデレーション: {'有効' if auto_mod else '無効'}\n"
+
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    # --------------------------------------------------
+    # /setting eew (EEWCog 用)
+    # --------------------------------------------------
+    @setting_group.command(
+        name="eew", description="地震速報の送信先チャンネルを設定します"
+    )
+    @app_commands.describe(channel="送信先のチャンネル")
+    async def setting_eew(
+        self, interaction: discord.Interaction, channel: discord.TextChannel
+    ):
+        async with self.db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, eew_channel_id)
+                VALUES ($1, $2)
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    eew_channel_id = $2,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                interaction.guild_id,
+                channel.id,
+            )
+
+        await interaction.response.send_message(
+            f"地震速報送信先チャンネルを {channel.mention} に設定しました。",
+            ephemeral=True,
         )
 
+    # --------------------------------------------------
+    # /setting status (確認コマンド)
+    # --------------------------------------------------
+    @setting_group.command(
+        name="status", description="現在のすべての設定状況を確認します"
+    )
+    async def setting_status(self, interaction: discord.Interaction):
+        settings = await get_guild_settings(self.db, interaction.guild_id)
+
+        if not settings:
+            embed = discord.Embed(
+                title="⚙️ 設定状況",
+                description="まだ設定が登録されていません。",
+                color=discord.Color.orange(),
+            )
+            await interaction.response.send_message(
+                embed=embed, ephemeral=True
+            )
+            return
+
         embed = discord.Embed(
-            title="⚙️ クイズ設定を更新しました",
-            description="\n".join(changes),
-            color=discord.Color.green()
+            title="⚙️ 現在の設定状況", color=discord.Color.blue()
+        )
+
+        def ch_fmt(ch_id):
+            return f"<#{ch_id}>" if ch_id else "未設定"
+
+        # Leveling 設定
+        lvl_status = "有効" if settings.get("leveling_enabled", True) else "無効"
+        embed.add_field(
+            name="📊 レベル機能",
+            value=f"状態: {lvl_status}\nLevelUp: {ch_fmt(settings.get('log_levelup_channel_id'))}\nRankUp: {ch_fmt(settings.get('log_rankup_channel_id'))}",
+            inline=False,
+        )
+
+        # Quiz 設定
+        embed.add_field(
+            name="🧩 クイズ設定",
+            value=f"専用Ch: {ch_fmt(settings.get('quiz_channel_id'))}\n回答時間: {settings.get('quiz_answer_time', 30)}秒\n制限時間: {settings.get('quiz_time_limit', 60)}秒",
+            inline=False,
+        )
+
+        # Moderation 設定
+        mod_status = "有効" if settings.get("auto_mod_enabled", True) else "無効"
+        embed.add_field(
+            name="🛡️ モデレーション",
+            value=f"自動Mod: {mod_status}\n冷笑削除Ch: {ch_fmt(settings.get('reishou_channel_id'))}\nModログCh: {ch_fmt(settings.get('mod_log_channel_id'))}",
+            inline=False,
+        )
+
+        # EEW 設定
+        embed.add_field(
+            name="🚨 地震速報",
+            value=f"送信先Ch: {ch_fmt(settings.get('eew_channel_id'))}",
+            inline=False,
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
+    if not hasattr(bot, "db_pool") or bot.db_pool is None:
+        if not DATABASE_URL:
+            raise ValueError("環境変数 DATABASE_URL が設定されていません。")
+        bot.db_pool = await asyncpg.create_pool(DATABASE_URL)
+
+    async with bot.db_pool.acquire() as conn:
+        await conn.execute(CREATE_TABLE_SQL)
+
     await bot.add_cog(SettingsCog(bot))

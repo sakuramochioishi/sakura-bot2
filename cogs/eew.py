@@ -54,7 +54,6 @@ def parse_shindo(shindo_str: str) -> float:
     match = re.search(r"\d+", clean_str)
     if match:
         val = float(match.group())
-        # もし 40 や 50 などの10倍値で入ってきた場合の補正
         if val >= 10:
             return val / 10.0
         return val
@@ -70,11 +69,29 @@ class EEWCog(commands.Cog):
         self.processed_events: dict[str, int] = {}
 
     async def cog_load(self):
+        # バックグラウンドタスク開始
         self.bg_task = self.bot.loop.create_task(self.listen_eew())
 
     async def cog_unload(self):
         if self.bg_task:
             self.bg_task.cancel()
+
+    # ==========================================
+    # 🗄️ SettingsCog から通知先チャンネルを取得
+    # ==========================================
+    async def get_all_eew_targets(self) -> list[int]:
+        """SettingsCog 経由で全サーバーの EEW 通知先 channel_id を取得"""
+        settings_cog = self.bot.get_cog("SettingsCog")
+        if not settings_cog:
+            logger.warning("[EEWCog] SettingsCog がロードされていません。")
+            return []
+
+        # SettingsCog 側で定義した取得メソッドを呼び出し
+        if hasattr(settings_cog, "get_all_eew_targets"):
+            return await settings_cog.get_all_eew_targets()
+        
+        logger.warning("[EEWCog] SettingsCog に get_all_eew_targets メソッドが見つかりません。")
+        return []
 
     # ==========================================
     # 📡 リアルタイム緊急地震速報ループ
@@ -84,7 +101,6 @@ class EEWCog(commands.Cog):
 
         while not self.bot.is_closed():
             try:
-                # ping_interval / ping_timeout を設定してサイレント切断を防止
                 async with websockets.connect(
                     WOLFX_EEW_WS, ping_interval=20, ping_timeout=10
                 ) as ws:
@@ -101,10 +117,13 @@ class EEWCog(commands.Cog):
                             continue
 
                         # Cancel 報の判定
-                        if data.get("isCancel") or data.get("Title") == "緊急地震速報（キャンセル）":
+                        if (
+                            data.get("isCancel")
+                            or data.get("Title") == "緊急地震速報（キャンセル）"
+                        ):
                             continue
 
-                        # Wolfx APIの震度取得（"max_intensity" または "Shindo1" に入る）
+                        # Wolfx APIの震度取得
                         max_shindo_raw = (
                             data.get("max_intensity")
                             or data.get("Shindo1")
@@ -118,12 +137,17 @@ class EEWCog(commands.Cog):
 
                         # 重複通知防止チェック（同じEventIDで同じ電文番号であればスキップ）
                         event_id = str(
-                            data.get("EventID") or data.get("EventID_Raw") or ""
+                            data.get("EventID")
+                            or data.get("EventID_Raw")
+                            or ""
                         )
                         serial_num = int(data.get("Serial", 0))
 
                         if event_id:
-                            if self.processed_events.get(event_id) == serial_num:
+                            if (
+                                self.processed_events.get(event_id)
+                                == serial_num
+                            ):
                                 continue
                             self.processed_events[event_id] = serial_num
 
@@ -133,27 +157,22 @@ class EEWCog(commands.Cog):
                                     next(iter(self.processed_events))
                                 )
 
-                        # --- 【重要修正箇所】Setting Cog から送信対象を取得 ---
-                        settings_cog = self.bot.get_cog("setting") or self.bot.get_cog("Setting")
-                        if not settings_cog:
-                            continue
+                        # SettingsCog 経由で通知対象チャンネルIDのリストを取得
+                        target_channels = await self.get_all_eew_targets()
 
-                        target_list = []
-                        if hasattr(settings_cog, "get_all_eew_targets"):
-                            func = getattr(settings_cog, "get_all_eew_targets")
-                            # 非同期関数(async def)の場合と通常関数の両方に対応
-                            if asyncio.iscoroutinefunction(func):
-                                target_list = await func()
-                            else:
-                                target_list = func()
-
-                        if not target_list:
+                        if not target_channels:
                             continue
 
                         # 情報の抽出
-                        hypocenter = data.get("Hypocenter") or data.get("Title", "不明")
-                        mag = data.get("Magunitude") or data.get("Magnitude", "不明")
-                        is_warn = data.get("isWarn", False) or data.get("is_warn", False)
+                        hypocenter = data.get("Hypocenter") or data.get(
+                            "Title", "不明"
+                        )
+                        mag = data.get("Magunitude") or data.get(
+                            "Magnitude", "不明"
+                        )
+                        is_warn = data.get("isWarn", False) or data.get(
+                            "is_warn", False
+                        )
                         is_final = data.get("isFinal", False)
 
                         title_type = (
@@ -167,7 +186,11 @@ class EEWCog(commands.Cog):
                         embed = discord.Embed(
                             title=f"{title_type} (最大震度 {max_shindo_raw})",
                             description=f"**{hypocenter}** 付近で地震が発生しました。",
-                            color=discord.Color.red() if is_warn else discord.Color.gold(),
+                            color=(
+                                discord.Color.red()
+                                if is_warn
+                                else discord.Color.gold()
+                            ),
                         )
                         embed.add_field(
                             name="予想最大震度",
@@ -180,7 +203,9 @@ class EEWCog(commands.Cog):
                             inline=True,
                         )
                         embed.add_field(
-                            name="震源地", value=str(hypocenter), inline=False
+                            name="震源地",
+                            value=str(hypocenter),
+                            inline=False,
                         )
 
                         if serial_num:
@@ -191,22 +216,13 @@ class EEWCog(commands.Cog):
                             embed.set_footer(text="データ提供: Wolfx API")
 
                         # 取得した全チャンネルに送信
-                        for item in target_list:
-                            # 戻り値が (channel_id, mention_str) か (channel_id,) かを安全に判定
-                            if isinstance(item, (tuple, list)):
-                                channel_id = item[0]
-                                mention_str = item[1] if len(item) > 1 else None
-                            else:
-                                channel_id = item
-                                mention_str = None
-
+                        for channel_id in target_channels:
                             channel = self.bot.get_channel(int(channel_id))
-                            if channel and isinstance(channel, discord.TextChannel):
+                            if channel and isinstance(
+                                channel, discord.TextChannel
+                            ):
                                 try:
-                                    await channel.send(
-                                        content=mention_str if mention_str else None,
-                                        embed=embed,
-                                    )
+                                    await channel.send(embed=embed)
                                 except discord.Forbidden:
                                     logger.warning(
                                         f"[EEWCog] チャンネル {channel_id} への送信権限がありません。"
@@ -256,7 +272,6 @@ class EEWCog(commands.Cog):
                 earthquake = item.get("earthquake", {})
                 max_scale_num = earthquake.get("maxScale", 0)
 
-                # 最大震度40以上（震度4以上）のみ抽出
                 if max_scale_num >= 40:
                     filtered_earthquakes.append(item)
                     if len(filtered_earthquakes) >= 10:

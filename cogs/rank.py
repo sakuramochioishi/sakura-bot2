@@ -25,7 +25,7 @@ ADVENTURER_RANKS = {
 }
 
 
-class Leveling(commands.Cog):
+class LevelingCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -43,6 +43,7 @@ class Leveling(commands.Cog):
         self.db_pool = await asyncpg.create_pool(db_url)
 
         async with self.db_pool.acquire() as conn:
+            # ユーザーレベル管理テーブル
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS user_levels (
@@ -74,29 +75,23 @@ class Leveling(commands.Cog):
     async def get_notification_channel(
         self, guild: discord.Guild, origin_channel: discord.TextChannel, kind: str
     ) -> discord.TextChannel:
-        """setting Cogからの設定値取得を安全に行い、失敗した場合は送信元チャンネルにフォールバックする"""
-        settings_cog = self.bot.get_cog("setting") or self.bot.get_cog("Setting")
-        if not settings_cog:
-            return origin_channel
-
+        """SettingsCogから通知チャンネルを取得し、存在しない場合は元のチャンネルにフォールバックする"""
         target_channel_id = None
-        try:
-            # kind に応じたメソッド名の候補を複数検索して安全に呼び出し
-            method_name = f"get_{kind}_channel_id"
-            if hasattr(settings_cog, method_name):
-                func = getattr(settings_cog, method_name)
-                if inspect.iscoroutinefunction(func):
-                    target_channel_id = await func(guild.id)
-                else:
-                    target_channel_id = func(guild.id)
-            elif hasattr(settings_cog, "get_channel_id"):
-                func = getattr(settings_cog, "get_channel_id")
-                if inspect.iscoroutinefunction(func):
-                    target_channel_id = await func(guild.id, kind)
-                else:
-                    target_channel_id = func(guild.id, kind)
-        except Exception as e:
-            logger.warning(f"Setting Cog からのチャンネルID取得中にエラーが発生しました ({kind}): {e}")
+
+        # SettingsCog から設定データを取得
+        settings_cog = self.bot.get_cog("SettingsCog")
+
+        if settings_cog:
+            try:
+                method_name = f"get_{kind}_channel_id"
+                if hasattr(settings_cog, method_name):
+                    func = getattr(settings_cog, method_name)
+                    if inspect.iscoroutinefunction(func):
+                        target_channel_id = await func(guild.id)
+                    else:
+                        target_channel_id = func(guild.id)
+            except Exception as e:
+                logger.warning(f"SettingsCog からのチャンネルID取得エラー ({kind}): {e}")
 
         if target_channel_id:
             target_channel = guild.get_channel(int(target_channel_id))
@@ -268,7 +263,9 @@ class Leveling(commands.Cog):
                                 allowed_mentions=discord.AllowedMentions(users=False),
                             )
                         except discord.Forbidden:
-                            logger.warning(f"[{message.guild.name}] チャンネル {level_channel.name} への送信権限がありません。")
+                            logger.warning(
+                                f"[{message.guild.name}] チャンネル {level_channel.name} への送信権限がありません。"
+                            )
 
                     # ロール更新とランクアップチェック
                     if isinstance(message.author, discord.Member):
@@ -278,7 +275,9 @@ class Leveling(commands.Cog):
                         )
 
                         # ランク帯自体が上がった（称号が変わった）場合の別通知処理
-                        if (prev_rank_name != rank_name or is_rank_changed) and isinstance(message.channel, discord.TextChannel):
+                        if (prev_rank_name != rank_name or is_rank_changed) and isinstance(
+                            message.channel, discord.TextChannel
+                        ):
                             rank_channel = await self.get_notification_channel(
                                 message.guild, message.channel, kind="rank"
                             )
@@ -293,7 +292,9 @@ class Leveling(commands.Cog):
                                     allowed_mentions=discord.AllowedMentions(users=False),
                                 )
                             except discord.Forbidden:
-                                logger.warning(f"[{message.guild.name}] チャンネル {rank_channel.name} への送信権限がありません。")
+                                logger.warning(
+                                    f"[{message.guild.name}] チャンネル {rank_channel.name} への送信権限がありません。"
+                                )
 
         except Exception as e:
             logger.error(f"on_message の処理中にエラーが発生しました: {e}", exc_info=True)
@@ -450,7 +451,7 @@ class Leveling(commands.Cog):
     # --- サーバー全員にビギナーロールを一括付与するコマンド ---
     @app_commands.command(
         name="sync_beginner_roles",
-        description="サーバー内の全員に初期ロール（Novice）を一括付与します（管理者専用）",
+        description="いずれかのランクロールを未所有のユーザーに初期ロール（Novice）を一括付与します（管理者専用）",
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def sync_beginner_roles(self, interaction: discord.Interaction):
@@ -474,8 +475,12 @@ class Leveling(commands.Cog):
             )
             return
 
+        # 定義されているすべての発言ランクロール名を取得
+        all_rank_role_names = {info[0] for info in ADVENTURER_RANKS.values()}
+
         added_count = 0
-        already_has_count = 0
+        already_has_novice_count = 0
+        has_higher_rank_count = 0
 
         # 全メンバーを取得
         members = guild.members
@@ -489,23 +494,36 @@ class Leveling(commands.Cog):
             if member.bot:
                 continue
 
-            if beginner_role in member.roles:
-                already_has_count += 1
-            else:
-                try:
-                    await member.add_roles(beginner_role, reason="一括初期ロール付与")
-                    added_count += 1
-                    # 大量のリクエストによるレートリミット回避
-                    await asyncio.sleep(0.3)
-                except Exception as e:
-                    logger.error(
-                        f"[{guild.name}] {member.display_name} へのロール付与失敗: {e}"
-                    )
+            # ユーザーが現在保持している発言ランクロールの一覧
+            user_rank_roles = [
+                role.name for role in member.roles if role.name in all_rank_role_names
+            ]
+
+            # 既に何らかの発言ランクロールを保有している場合
+            if user_rank_roles:
+                if target_role_name in user_rank_roles:
+                    already_has_novice_count += 1
+                else:
+                    # Novice以外のランク（Bronze以上）を持っている場合は除外
+                    has_higher_rank_count += 1
+                continue
+
+            # 発言ランクロールを1つも持っていないユーザーにNoviceを付与
+            try:
+                await member.add_roles(beginner_role, reason="一括初期ロール付与")
+                added_count += 1
+                # 大量のリクエストによるレートリミット回避
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                logger.error(
+                    f"[{guild.name}] {member.display_name} へのロール付与失敗: {e}"
+                )
 
         await interaction.followup.send(
             f"✅ **一括付与が完了しました！**\n"
             f"・新規付与: **{added_count} 人**\n"
-            f"・既に所有済み: **{already_has_count} 人**"
+            f"・既に Novice 所有済み: **{already_has_novice_count} 人**\n"
+            f"・上位ランク所有（除外）: **{has_higher_rank_count} 人**"
         )
 
     @sync_beginner_roles.error
@@ -522,4 +540,4 @@ class Leveling(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Leveling(bot))
+    await bot.add_cog(LevelingCog(bot))
