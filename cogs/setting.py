@@ -16,7 +16,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ==========================================
-# 2. テーブル作成用 SQL
+# 2. テーブル作成 & カラム自動追加 用 SQL
 # ==========================================
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS guild_settings (
@@ -42,6 +42,22 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 既存テーブルが存在する場合に足りない列を自動で追加するマイグレーションSQL
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS log_levelup_channel_id BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS log_rankup_channel_id BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS leveling_enabled BOOLEAN DEFAULT TRUE;
+
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS quiz_answer_time INT DEFAULT 30;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS quiz_time_limit INT DEFAULT 60;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS quiz_channel_id BIGINT;
+
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS reishou_channel_id BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS mod_log_channel_id BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS auto_mod_enabled BOOLEAN DEFAULT TRUE;
+
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_channel_id BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
 """
 
 # ==========================================
@@ -393,7 +409,7 @@ class SettingsCog(commands.Cog):
             inline=False,
         )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, )
 
 
 async def setup(bot: commands.Bot):
