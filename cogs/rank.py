@@ -97,12 +97,24 @@ class LevelingCog(commands.Cog):
 
         if settings_cog and hasattr(settings_cog, "get_leveling_config"):
             try:
-                config = await settings_cog.get_leveling_config(guild.id)
+                # get_leveling_config がコルーチン（async def）か通常関数かに応じて await
+                config = settings_cog.get_leveling_config(guild.id)
+                if asyncio.iscoroutine(config):
+                    config = await config
+
                 if config:
-                    if kind == "levelup":
-                        target_channel_id = config.get("log_levelup_channel_id")
-                    elif kind == "rankup":
-                        target_channel_id = config.get("log_rankup_channel_id") or config.get("log_levelup_channel_id")
+                    # 辞書型なのかオブジェクト（属性アクセス）なのかで分岐
+                    if isinstance(config, dict):
+                        if kind == "levelup":
+                            target_channel_id = config.get("log_levelup_channel_id") or config.get("levelup_channel_id")
+                        elif kind == "rankup":
+                            target_channel_id = config.get("log_rankup_channel_id") or config.get("rankup_channel_id") or config.get("log_levelup_channel_id")
+                    else:
+                        # オブジェクト形式の場合
+                        if kind == "levelup":
+                            target_channel_id = getattr(config, "log_levelup_channel_id", None) or getattr(config, "levelup_channel_id", None)
+                        elif kind == "rankup":
+                            target_channel_id = getattr(config, "log_rankup_channel_id", None) or getattr(config, "rankup_channel_id", None) or getattr(config, "log_levelup_channel_id", None)
             except Exception as e:
                 logger.warning(f"SettingsCog からの設定取得に失敗しました: {e}")
 
@@ -129,7 +141,6 @@ class LevelingCog(commands.Cog):
             return await self.get_notification_channel(guild, origin_channel, kind="levelup")
 
         return origin_channel
-
     async def ensure_roles(
         self, guild: discord.Guild
     ) -> tuple[list[str], list[str]]:
