@@ -3,7 +3,14 @@ from datetime import datetime, timezone
 import logging
 import os
 import random
-import asyncpg
+from typing import Optional
+
+asyncpg = None  # 型補完用ダミー
+try:
+    import asyncpg
+except ImportError:
+    pass
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -24,11 +31,17 @@ ADVENTURER_RANKS = {
 }
 
 
+# --- Botオーナー判定用チェック関数 ---
+async def is_bot_owner(interaction: discord.Interaction) -> bool:
+    """実行者がBotの所有者であるかを判定する"""
+    return await interaction.client.is_owner(interaction.user)
+
+
 class LevelingCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.db_pool: asyncpg.Pool | None = None
+        self.db_pool: Optional[asyncpg.Pool] = None
         self._roles_ensured: bool = False  # on_ready の重複実行防止フラグ
 
     async def cog_load(self):
@@ -62,7 +75,14 @@ class LevelingCog(commands.Cog):
             await self.db_pool.close()
 
     def calculate_level(self, xp: int) -> int:
+        """累積XPからレベルを計算"""
         return int((xp / 100) ** (1 / 1.5)) + 1
+
+    def calculate_required_xp(self, level: int) -> int:
+        """レベル到達に必要な累積XPを計算（calculate_levelの逆算）"""
+        if level <= 1:
+            return 0
+        return int(100 * ((level - 1) ** 1.5))
 
     def get_rank_info(self, level: int) -> tuple[str, discord.Color]:
         """レベルに応じた (ロール名, ロールカラー) を返す"""
@@ -71,6 +91,9 @@ class LevelingCog(commands.Cog):
                 return rank_name, color
         return "🔰 Novice（駆け出し）", discord.Color.green()
 
+    # ==========================================
+    # 📢 通知チャンネル取得メソッド
+    # ==========================================
     async def get_notification_channel(
         self, guild: discord.Guild, origin_channel: discord.TextChannel, kind: str = "levelup"
     ) -> discord.TextChannel:
@@ -82,7 +105,9 @@ class LevelingCog(commands.Cog):
         target_channel_id = None
         settings_cog = self.bot.get_cog("SettingsCog")
 
-        if settings_cog:
+        if not settings_cog:
+            logger.debug("デバッグ: SettingsCog がロードされていません。")
+        else:
             method_name = f"get_log_{kind}_channel_id"
             attr_name = f"log_{kind}_channel_id"
 
@@ -107,15 +132,27 @@ class LevelingCog(commands.Cog):
                     f"SettingsCog から {attr_name} の取得に失敗しました: {e}"
                 )
 
-        # 指定チャンネルが存在し、メッセージ送信権限があれば取得
         if target_channel_id:
-            target_channel = guild.get_channel(int(target_channel_id))
-            if (
-                target_channel
-                and isinstance(target_channel, discord.TextChannel)
-                and target_channel.permissions_for(guild.me).send_messages
-            ):
-                return target_channel
+            try:
+                channel_id_int = int(target_channel_id)
+                # キャッシュから取得を試み、無ければ API から取得
+                target_channel = guild.get_channel(channel_id_int)
+                if target_channel is None:
+                    try:
+                        target_channel = await self.bot.fetch_channel(channel_id_int)
+                    except Exception:
+                        target_channel = None
+
+                if (
+                    target_channel
+                    and isinstance(target_channel, discord.TextChannel)
+                    and target_channel.permissions_for(guild.me).send_messages
+                ):
+                    return target_channel
+                else:
+                    logger.warning(f"指定されたチャンネル(ID: {channel_id_int})への送信権限が無いか存在しません。")
+            except ValueError:
+                logger.error(f"取得されたチャンネルID ({target_channel_id}) を int に変換できませんでした。")
 
         # rankup チャンネルが指定されていない・見つからない場合は levelup チャンネルにフォールバック
         if kind == "rankup":
@@ -203,6 +240,9 @@ class LevelingCog(commands.Cog):
 
         return is_rank_changed
 
+    # ==========================================
+    # 🎧 イベントリスナー
+    # ==========================================
     @commands.Cog.listener()
     async def on_ready(self):
         if not self._roles_ensured:
@@ -270,7 +310,7 @@ class LevelingCog(commands.Cog):
                 if new_level > current_level:
                     rank_name, _ = self.get_rank_info(new_level)
 
-                    # SettingsCog から log_levelup_channel_id を直接取得
+                    # SettingsCog から log_levelup_channel_id を取得
                     if isinstance(message.channel, discord.TextChannel):
                         level_channel = await self.get_notification_channel(
                             message.guild, message.channel, kind="levelup"
@@ -295,7 +335,7 @@ class LevelingCog(commands.Cog):
                             message.author, new_level
                         )
 
-                        # ランク帯自体が上がった場合の通知処理（log_rankup_channel_id を直接取得）
+                        # ランク帯自体が上がった場合の通知処理（log_rankup_channel_id を取得）
                         if (prev_rank_name != rank_name or is_rank_changed) and isinstance(
                             message.channel, discord.TextChannel
                         ):
@@ -320,7 +360,9 @@ class LevelingCog(commands.Cog):
         except Exception as e:
             logger.error(f"on_message の処理中にエラーが発生しました: {e}", exc_info=True)
 
-    # --- /level コマンド ---
+    # ==========================================
+    # ⚔️ 一般ユーザー用スラッシュコマンド
+    # ==========================================
     @app_commands.command(
         name="level", description="自分または指定ユーザーのレベルと発言ランクを確認します"
     )
@@ -366,7 +408,6 @@ class LevelingCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    # --- /rank コマンド ---
     @app_commands.command(
         name="rank",
         description="このサーバーの発言数レベルランキングTOP 10を表示します",
@@ -426,7 +467,9 @@ class LevelingCog(commands.Cog):
         embed.description = "\n".join(rank_list)
         await interaction.followup.send(embed=embed)
 
-    # --- /role コマンド (管理者限定) ---
+    # ==========================================
+    # 🔨 サーバー管理者用スラッシュコマンド
+    # ==========================================
     @app_commands.command(
         name="role",
         description="発言システム用ロールの確認および未作成ロールを追加します（管理者専用）",
@@ -457,19 +500,6 @@ class LevelingCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @role.error
-    async def role_error(
-        self,
-        interaction: discord.Interaction,
-        error: app_commands.AppCommandError,
-    ):
-        if isinstance(error, app_commands.MissingPermissions):
-            await interaction.response.send_message(
-                "❌ このコマンドを実行するには**管理者権限（Administrator）**が必要です。",
-                ephemeral=True,
-            )
-
-    # --- サーバー全員にビギナーロールを一括付与するコマンド ---
     @app_commands.command(
         name="sync_beginner_roles",
         description="いずれかのランクロールを未所有のユーザーに初期ロール（Novice）を一括付与します（管理者専用）",
@@ -540,17 +570,216 @@ class LevelingCog(commands.Cog):
             f"・上位ランク所有（除外）: **{has_higher_rank_count} 人**"
         )
 
-    @sync_beginner_roles.error
-    async def sync_beginner_roles_error(
+    # ==========================================
+    # 👑 Bot所有者(オーナー)専用コマンド
+    # ==========================================
+    @app_commands.command(
+        name="level_debug", description="【デバッグ】指定ユーザーのDB生データや状態を確認します（Botオーナー専用）"
+    )
+    @app_commands.check(is_bot_owner)
+    async def level_debug(
         self,
         interaction: discord.Interaction,
-        error: app_commands.AppCommandError,
+        target: Optional[discord.Member] = None,
+    ):
+        await interaction.response.defer(ephemeral=True)
+        user = target or interaction.user
+
+        if not interaction.guild_id or not self.db_pool:
+            await interaction.followup.send("DBまたはギルド情報が取得できません。", ephemeral=True)
+            return
+
+        async with self.db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT xp, level, last_message_at FROM user_levels WHERE guild_id = $1 AND user_id = $2",
+                interaction.guild_id,
+                user.id,
+            )
+            total_users = await conn.fetchval(
+                "SELECT COUNT(*) FROM user_levels WHERE guild_id = $1",
+                interaction.guild_id,
+            )
+
+        embed = discord.Embed(
+            title=f"🛠️ デバッグ情報: {user.display_name}", color=discord.Color.gold()
+        )
+        embed.add_field(name="ユーザーID", value=f"`{user.id}`", inline=True)
+        embed.add_field(name="ギルドID", value=f"`{interaction.guild_id}`", inline=True)
+
+        if row:
+            embed.add_field(name="DB XP", value=f"`{row['xp']}`", inline=True)
+            embed.add_field(name="DB Level", value=f"`{row['level']}`", inline=True)
+            embed.add_field(
+                name="最終獲得日時 (UTC)",
+                value=f"`{row['last_message_at']}`",
+                inline=False,
+            )
+        else:
+            embed.add_field(name="DB レコード", value="❌ レコードが存在しません", inline=False)
+
+        embed.add_field(name="ギルド内登録ユーザー数", value=f"{total_users} 人", inline=False)
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="add_xp", description="【管理者】指定したユーザーにXPを付与します（Botオーナー専用）"
+    )
+    @app_commands.describe(target="対象ユーザー", amount="付与するXP量")
+    @app_commands.check(is_bot_owner)
+    async def add_xp(
+        self, interaction: discord.Interaction, target: discord.Member, amount: int
+    ):
+        if amount <= 0:
+            await interaction.response.send_message("付与するXPは1以上にしてください。", ephemeral=True)
+            return
+
+        if not interaction.guild or not self.db_pool:
+            await interaction.response.send_message("ギルドまたはDB接続が存在しません。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        now = datetime.now(timezone.utc)
+        async with self.db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT xp, level FROM user_levels WHERE guild_id = $1 AND user_id = $2",
+                interaction.guild_id,
+                target.id,
+            )
+
+            current_xp = row["xp"] if row else 0
+            old_level = row["level"] if row else 1
+            new_xp = current_xp + amount
+            new_level = self.calculate_level(new_xp)
+
+            await conn.execute(
+                """
+                INSERT INTO user_levels (guild_id, user_id, xp, level, last_message_at)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (guild_id, user_id) 
+                DO UPDATE SET xp = $3, level = $4, last_message_at = $5;
+                """,
+                interaction.guild_id,
+                target.id,
+                new_xp,
+                new_level,
+                now,
+            )
+
+        # ロール更新と通知処理
+        if new_level > old_level:
+            await self.update_user_roles(target, new_level)
+            if isinstance(interaction.channel, discord.TextChannel):
+                notify_channel = await self.get_notification_channel(
+                    interaction.guild, interaction.channel, kind="levelup"
+                )
+                await notify_channel.send(
+                    f"🎉 {target.mention} がレベルアップしました！ **Lv.{old_level}** ➔ **Lv.{new_level}**",
+                    allowed_mentions=discord.AllowedMentions(users=False),
+                )
+
+        await interaction.followup.send(
+            f"✅ **{target.mention}** に `{amount} XP` を付与しました。\n"
+            f"現在のXP: `{new_xp}` | レベル: `{new_level}`",
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="set_level", description="【管理者】指定したユーザーのレベルを直接変更します（Botオーナー専用）"
+    )
+    @app_commands.describe(target="対象ユーザー", level="設定するレベル")
+    @app_commands.check(is_bot_owner)
+    async def set_level(
+        self, interaction: discord.Interaction, target: discord.Member, level: int
+    ):
+        if level < 1:
+            await interaction.response.send_message("レベルは1以上で指定してください。", ephemeral=True)
+            return
+
+        if not interaction.guild or not self.db_pool:
+            await interaction.response.send_message("ギルドまたはDB接続が存在しません。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        required_xp = self.calculate_required_xp(level)
+        now = datetime.now(timezone.utc)
+
+        async with self.db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO user_levels (guild_id, user_id, xp, level, last_message_at)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (guild_id, user_id) 
+                DO UPDATE SET xp = $3, level = $4, last_message_at = $5;
+                """,
+                interaction.guild_id,
+                target.id,
+                required_xp,
+                level,
+                now,
+            )
+
+        await self.update_user_roles(target, level)
+
+        await interaction.followup.send(
+            f"✅ **{target.mention}** のレベルを `{level}`（累積XP: `{required_xp}`）に設定しました。",
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="reset_level", description="【管理者】指定したユーザーのXP・レベルをリセットします（Botオーナー専用）"
+    )
+    @app_commands.describe(target="対象ユーザー")
+    @app_commands.check(is_bot_owner)
+    async def reset_level(
+        self, interaction: discord.Interaction, target: discord.Member
+    ):
+        if not interaction.guild_id or not self.db_pool:
+            await interaction.response.send_message("ギルドまたはDB接続が存在しません。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        async with self.db_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM user_levels WHERE guild_id = $1 AND user_id = $2",
+                interaction.guild_id,
+                target.id,
+            )
+
+        # レベル1（初期ランク）に更新
+        await self.update_user_roles(target, 1)
+
+        await interaction.followup.send(
+            f"🔄 **{target.mention}** のレベルデータをリセットしました。",
+            ephemeral=True,
+        )
+
+    # ==========================================
+    # ⚠️ エラーハンドラー
+    # ==========================================
+    @role.error
+    @sync_beginner_roles.error
+    @add_xp.error
+    @set_level.error
+    @reset_level.error
+    @level_debug.error
+    async def command_error_handler(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ):
         if isinstance(error, app_commands.MissingPermissions):
-            await interaction.response.send_message(
-                "❌ このコマンドを実行するには**管理者権限（Administrator）**が必要です。",
-                ephemeral=True,
-            )
+            msg = "❌ このコマンドを実行するには**管理者権限（Administrator）**が必要です。"
+        elif isinstance(error, app_commands.CheckFailure):
+            msg = "🚫 このコマンドはBotの所有者のみ実行できます。"
+        else:
+            logger.error(f"コマンドエラーが発生しました: {error}", exc_info=True)
+            msg = f"❌ エラーが発生しました: {error}"
+
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
