@@ -1,5 +1,6 @@
-import json
 import asyncio
+import json
+import logging
 import re
 import aiohttp
 import discord
@@ -7,31 +8,50 @@ from discord import app_commands
 from discord.ext import commands
 import websockets
 
+logger = logging.getLogger(__name__)
+
 WOLFX_EEW_WS = "wss://ws-api.wolfx.jp/jma_eew"
 
 SCALE_MAP = {
-    10: "震度1", 20: "震度2", 30: "震度3", 40: "震度4",
-    45: "震度5弱", 50: "震度5強", 55: "震度6弱", 60: "震度6強", 70: "震度7"
+    10: "震度1",
+    20: "震度2",
+    30: "震度3",
+    40: "震度4",
+    45: "震度5弱",
+    50: "震度5強",
+    55: "震度6弱",
+    60: "震度6強",
+    70: "震度7",
 }
+
 
 def parse_shindo(shindo_str: str) -> float:
     """震度文字列（"5弱", "5-", "6+", 60 等）を float の値に変換"""
     if not shindo_str or str(shindo_str) in ["不明", "0", "None"]:
         return 0.0
-    
+
     mapping = {
-        "1": 1.0, "2": 2.0, "3": 3.0, "4": 4.0,
-        "5-": 5.0, "5弱": 5.0, "5+": 5.5, "5強": 5.5,
-        "6-": 6.0, "6弱": 6.0, "6+": 6.5, "6強": 6.5,
-        "7": 7.0
+        "1": 1.0,
+        "2": 2.0,
+        "3": 3.0,
+        "4": 4.0,
+        "5-": 5.0,
+        "5弱": 5.0,
+        "5+": 5.5,
+        "5強": 5.5,
+        "6-": 6.0,
+        "6弱": 6.0,
+        "6+": 6.5,
+        "6強": 6.5,
+        "7": 7.0,
     }
-    
+
     clean_str = str(shindo_str).strip()
     if clean_str in mapping:
         return mapping[clean_str]
-    
+
     # 数値形式（P2P等の 10, 20... 80）や直接の数字抽出
-    match = re.search(r'\d+', clean_str)
+    match = re.search(r"\d+", clean_str)
     if match:
         val = float(match.group())
         # もし 40 や 50 などの10倍値で入ってきた場合の補正
@@ -42,11 +62,12 @@ def parse_shindo(shindo_str: str) -> float:
 
 
 class EEWCog(commands.Cog):
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.bg_task = None
-        # 連投防止用の状態管理 {EventID: last_serial_number}
-        self.processed_events = {}
+        self.bg_task: asyncio.Task | None = None
+        # 重複防止用の状態管理 {EventID: last_serial_number}
+        self.processed_events: dict[str, int] = {}
 
     async def cog_load(self):
         self.bg_task = self.bot.loop.create_task(self.listen_eew())
@@ -60,20 +81,23 @@ class EEWCog(commands.Cog):
     # ==========================================
     async def listen_eew(self):
         await self.bot.wait_until_ready()
-        
+
         while not self.bot.is_closed():
             try:
                 # ping_interval / ping_timeout を設定してサイレント切断を防止
-                async with websockets.connect(WOLFX_EEW_WS, ping_interval=20, ping_timeout=10) as ws:
-                    print("[EEWCog] WebSocket 接続成功")
+                async with websockets.connect(
+                    WOLFX_EEW_WS, ping_interval=20, ping_timeout=10
+                ) as ws:
+                    logger.info("[EEWCog] WebSocket 接続成功")
                     async for message in ws:
                         try:
                             data = json.loads(message)
                         except json.JSONDecodeError:
                             continue
-                        
+
                         # 心拍(heartbeat)ログまたは判定不可能なデータのスキップ
-                        if data.get("type") == "heartbeat" or data.get("type") == "ping":
+                        msg_type = data.get("type")
+                        if msg_type in ["heartbeat", "ping"]:
                             continue
 
                         # Cancel 報の判定
@@ -81,7 +105,11 @@ class EEWCog(commands.Cog):
                             continue
 
                         # Wolfx APIの震度取得（"max_intensity" または "Shindo1" に入る）
-                        max_shindo_raw = data.get("max_intensity") or data.get("Shindo1") or "0"
+                        max_shindo_raw = (
+                            data.get("max_intensity")
+                            or data.get("Shindo1")
+                            or "0"
+                        )
                         shindo_value = parse_shindo(max_shindo_raw)
 
                         # 震度4未満はスキップ
@@ -89,24 +117,36 @@ class EEWCog(commands.Cog):
                             continue
 
                         # 重複通知防止チェック（同じEventIDで同じ電文番号であればスキップ）
-                        event_id = data.get("EventID") or data.get("EventID_Raw")
-                        serial_num = data.get("Serial", 0)
-                        
+                        event_id = str(
+                            data.get("EventID") or data.get("EventID_Raw") or ""
+                        )
+                        serial_num = int(data.get("Serial", 0))
+
                         if event_id:
                             if self.processed_events.get(event_id) == serial_num:
                                 continue
                             self.processed_events[event_id] = serial_num
-                            
+
                             # メモリリーク防止（履歴が100件を超えたら古いものを削除）
                             if len(self.processed_events) > 100:
-                                self.processed_events.pop(next(iter(self.processed_events)))
+                                self.processed_events.pop(
+                                    next(iter(self.processed_events))
+                                )
 
-                        # 設定Cogから送信対象を取得
-                        settings_cog = self.bot.get_cog("setting") or self.bot.get_cog("SettingsCog")
-                        if not settings_cog or not hasattr(settings_cog, "get_all_eew_targets"):
+                        # --- 【重要修正箇所】Setting Cog から送信対象を取得 ---
+                        settings_cog = self.bot.get_cog("setting") or self.bot.get_cog("Setting")
+                        if not settings_cog:
                             continue
 
-                        target_list = settings_cog.get_all_eew_targets()
+                        target_list = []
+                        if hasattr(settings_cog, "get_all_eew_targets"):
+                            func = getattr(settings_cog, "get_all_eew_targets")
+                            # 非同期関数(async def)の場合と通常関数の両方に対応
+                            if asyncio.iscoroutinefunction(func):
+                                target_list = await func()
+                            else:
+                                target_list = func()
+
                         if not target_list:
                             continue
 
@@ -116,40 +156,73 @@ class EEWCog(commands.Cog):
                         is_warn = data.get("isWarn", False) or data.get("is_warn", False)
                         is_final = data.get("isFinal", False)
 
-                        title_type = "🚨 **【緊急地震速報（警報）】**" if is_warn else "⚠️ **【緊急地震速報（予報）】**"
+                        title_type = (
+                            "🚨 **【緊急地震速報（警報）】**"
+                            if is_warn
+                            else "⚠️ **【緊急地震速報（予報）】**"
+                        )
                         if is_final:
                             title_type += " (最終報)"
 
                         embed = discord.Embed(
                             title=f"{title_type} (最大震度 {max_shindo_raw})",
                             description=f"**{hypocenter}** 付近で地震が発生しました。",
-                            color=discord.Color.red() if is_warn else discord.Color.gold()
+                            color=discord.Color.red() if is_warn else discord.Color.gold(),
                         )
-                        embed.add_field(name="予想最大震度", value=str(max_shindo_raw), inline=True)
-                        embed.add_field(name="マグニチュード", value=f"M{mag}" if str(mag) != "不明" else "不明", inline=True)
-                        embed.add_field(name="震源地", value=str(hypocenter), inline=False)
-                        
+                        embed.add_field(
+                            name="予想最大震度",
+                            value=str(max_shindo_raw),
+                            inline=True,
+                        )
+                        embed.add_field(
+                            name="マグニチュード",
+                            value=f"M{mag}" if str(mag) != "不明" else "不明",
+                            inline=True,
+                        )
+                        embed.add_field(
+                            name="震源地", value=str(hypocenter), inline=False
+                        )
+
                         if serial_num:
-                            embed.set_footer(text=f"第 {serial_num} 報 | データ提供: Wolfx API")
+                            embed.set_footer(
+                                text=f"第 {serial_num} 報 | データ提供: Wolfx API"
+                            )
                         else:
                             embed.set_footer(text="データ提供: Wolfx API")
 
-                        for channel_id, mention_str in target_list:
-                            channel = self.bot.get_channel(channel_id)
-                            if channel:
+                        # 取得した全チャンネルに送信
+                        for item in target_list:
+                            # 戻り値が (channel_id, mention_str) か (channel_id,) かを安全に判定
+                            if isinstance(item, (tuple, list)):
+                                channel_id = item[0]
+                                mention_str = item[1] if len(item) > 1 else None
+                            else:
+                                channel_id = item
+                                mention_str = None
+
+                            channel = self.bot.get_channel(int(channel_id))
+                            if channel and isinstance(channel, discord.TextChannel):
                                 try:
                                     await channel.send(
                                         content=mention_str if mention_str else None,
-                                        embed=embed
+                                        embed=embed,
+                                    )
+                                except discord.Forbidden:
+                                    logger.warning(
+                                        f"[EEWCog] チャンネル {channel_id} への送信権限がありません。"
                                     )
                                 except Exception as send_error:
-                                    print(f"[EEWCog] メッセージ送信失敗 ({channel_id}): {send_error}")
+                                    logger.error(
+                                        f"[EEWCog] メッセージ送信失敗 ({channel_id}): {send_error}"
+                                    )
 
             except asyncio.CancelledError:
-                print("[EEWCog] タスクが終了しました")
+                logger.info("[EEWCog] WebSocket タスクが終了しました")
                 break
             except Exception as e:
-                print(f"[EEWCog] エラー発生: {e}. 5秒後に再接続します...")
+                logger.error(
+                    f"[EEWCog] WebSocketエラー発生: {e}. 5秒後に再接続します..."
+                )
                 await asyncio.sleep(5)
 
     # ==========================================
@@ -157,7 +230,7 @@ class EEWCog(commands.Cog):
     # ==========================================
     @app_commands.command(
         name="eew_history",
-        description="直近の最大震度4以上の地震履歴（10件）を取得します"
+        description="直近の最大震度4以上の地震履歴（10件）を取得します",
     )
     @app_commands.guild_only()
     async def eew_history(self, interaction: discord.Interaction):
@@ -167,9 +240,13 @@ class EEWCog(commands.Cog):
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers={"User-Agent": "DiscordBot/1.0"}) as resp:
+                async with session.get(
+                    url, headers={"User-Agent": "DiscordBot/1.0"}
+                ) as resp:
                     if resp.status != 200:
-                        await interaction.followup.send("❌ 地震情報の取得に失敗しました。")
+                        await interaction.followup.send(
+                            "❌ 地震情報の取得に失敗しました。"
+                        )
                         return
 
                     data = await resp.json()
@@ -186,13 +263,15 @@ class EEWCog(commands.Cog):
                         break
 
             if not filtered_earthquakes:
-                await interaction.followup.send("ℹ️ 直近で観測された震度4以上の地震はありません。")
+                await interaction.followup.send(
+                    "ℹ️ 直近で観測された震度4以上の地震はありません。"
+                )
                 return
 
             embed = discord.Embed(
                 title="🌋 直近の地震履歴（最大震度4以上）",
                 description="直近で発生した最大震度4以上の地震情報（最大10件）です。",
-                color=discord.Color.red()
+                color=discord.Color.red(),
             )
 
             for item in filtered_earthquakes:
@@ -216,7 +295,7 @@ class EEWCog(commands.Cog):
                 embed.add_field(
                     name=f"地震情報 - {time_str}",
                     value=field_value,
-                    inline=False
+                    inline=False,
                 )
 
             embed.set_footer(text="データ提供: P2P地震情報 API")
