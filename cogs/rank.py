@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime, timezone
-import inspect
 import logging
 import os
 import random
@@ -73,26 +72,42 @@ class LevelingCog(commands.Cog):
         return "🔰 Novice（駆け出し）", discord.Color.green()
 
     async def get_notification_channel(
-        self, guild: discord.Guild, origin_channel: discord.TextChannel, kind: str
+        self, guild: discord.Guild, origin_channel: discord.TextChannel, kind: str = "levelup"
     ) -> discord.TextChannel:
-        """SettingsCogから通知チャンネルを取得し、存在しない場合は元のチャンネルにフォールバックする"""
+        """
+        SettingsCog から直接通知用チャンネルIDを取得する。
+        kind="levelup" -> log_levelup_channel_id
+        kind="rankup"  -> log_rankup_channel_id
+        """
         target_channel_id = None
-
-        # SettingsCog から設定データを取得
         settings_cog = self.bot.get_cog("SettingsCog")
 
         if settings_cog:
+            method_name = f"get_log_{kind}_channel_id"
+            attr_name = f"log_{kind}_channel_id"
+
             try:
-                method_name = f"get_{kind}_channel_id"
+                # 1. get_log_levelup_channel_id / get_log_rankup_channel_id メソッドが存在する場合
                 if hasattr(settings_cog, method_name):
                     func = getattr(settings_cog, method_name)
-                    if inspect.iscoroutinefunction(func):
+                    if asyncio.iscoroutinefunction(func):
                         target_channel_id = await func(guild.id)
                     else:
                         target_channel_id = func(guild.id)
-            except Exception as e:
-                logger.warning(f"SettingsCog からのチャンネルID取得エラー ({kind}): {e}")
 
+                # 2. log_levelup_channel_id / log_rankup_channel_id 属性または辞書を直接参照する場合
+                elif hasattr(settings_cog, attr_name):
+                    attr = getattr(settings_cog, attr_name)
+                    if isinstance(attr, dict):
+                        target_channel_id = attr.get(guild.id)
+                    else:
+                        target_channel_id = attr
+            except Exception as e:
+                logger.warning(
+                    f"SettingsCog から {attr_name} の取得に失敗しました: {e}"
+                )
+
+        # 指定チャンネルが存在し、メッセージ送信権限があれば取得
         if target_channel_id:
             target_channel = guild.get_channel(int(target_channel_id))
             if (
@@ -101,6 +116,12 @@ class LevelingCog(commands.Cog):
                 and target_channel.permissions_for(guild.me).send_messages
             ):
                 return target_channel
+
+        # rankup チャンネルが指定されていない・見つからない場合は levelup チャンネルにフォールバック
+        if kind == "rankup":
+            return await self.get_notification_channel(
+                guild, origin_channel, kind="levelup"
+            )
 
         return origin_channel
 
@@ -249,10 +270,10 @@ class LevelingCog(commands.Cog):
                 if new_level > current_level:
                     rank_name, _ = self.get_rank_info(new_level)
 
-                    # レベルアップ通知チャンネルを取得して送信
+                    # SettingsCog から log_levelup_channel_id を直接取得
                     if isinstance(message.channel, discord.TextChannel):
                         level_channel = await self.get_notification_channel(
-                            message.guild, message.channel, kind="level"
+                            message.guild, message.channel, kind="levelup"
                         )
 
                         try:
@@ -274,12 +295,12 @@ class LevelingCog(commands.Cog):
                             message.author, new_level
                         )
 
-                        # ランク帯自体が上がった（称号が変わった）場合の別通知処理
+                        # ランク帯自体が上がった場合の通知処理（log_rankup_channel_id を直接取得）
                         if (prev_rank_name != rank_name or is_rank_changed) and isinstance(
                             message.channel, discord.TextChannel
                         ):
                             rank_channel = await self.get_notification_channel(
-                                message.guild, message.channel, kind="rank"
+                                message.guild, message.channel, kind="rankup"
                             )
                             embed = discord.Embed(
                                 title="👑 RANK UP!",
@@ -475,14 +496,12 @@ class LevelingCog(commands.Cog):
             )
             return
 
-        # 定義されているすべての発言ランクロール名を取得
         all_rank_role_names = {info[0] for info in ADVENTURER_RANKS.values()}
 
         added_count = 0
         already_has_novice_count = 0
         has_higher_rank_count = 0
 
-        # 全メンバーを取得
         members = guild.members
         if len(members) < guild.member_count:
             try:
@@ -494,25 +513,20 @@ class LevelingCog(commands.Cog):
             if member.bot:
                 continue
 
-            # ユーザーが現在保持している発言ランクロールの一覧
             user_rank_roles = [
                 role.name for role in member.roles if role.name in all_rank_role_names
             ]
 
-            # 既に何らかの発言ランクロールを保有している場合
             if user_rank_roles:
                 if target_role_name in user_rank_roles:
                     already_has_novice_count += 1
                 else:
-                    # Novice以外のランク（Bronze以上）を持っている場合は除外
                     has_higher_rank_count += 1
                 continue
 
-            # 発言ランクロールを1つも持っていないユーザーにNoviceを付与
             try:
                 await member.add_roles(beginner_role, reason="一括初期ロール付与")
                 added_count += 1
-                # 大量のリクエストによるレートリミット回避
                 await asyncio.sleep(0.3)
             except Exception as e:
                 logger.error(
