@@ -56,7 +56,7 @@ class HelpCog(commands.Cog):
         bot_avatar = self.bot.user.display_avatar.url if self.bot.user else None
         embed.set_footer(text="SAKURA-BOT System", icon_url=bot_avatar)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed,)
 
 
     @commands.command(name="skr_help")

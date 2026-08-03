@@ -132,6 +132,7 @@ class EEWCog(commands.Cog):
                         shindo_value = parse_shindo(max_shindo_raw)
 
                         # 震度4未満はスキップ
+                        # ※テストで今すぐ確認したい場合は一時的に 1.0 などに下げてください
                         if shindo_value < 4.0:
                             continue
 
@@ -159,8 +160,12 @@ class EEWCog(commands.Cog):
 
                         # SettingsCog 経由で通知対象チャンネルIDのリストを取得
                         target_channels = await self.get_all_eew_targets()
+                        
+                        # 💡 チャンネルが正しく取得できているかログで確認できるように追加
+                        logger.info(f"[EEWCog] 取得した通知先チャンネル一覧: {target_channels}")
 
                         if not target_channels:
+                            logger.info("[EEWCog] 通知先チャンネルが設定されていないためスキップします。")
                             continue
 
                         # 情報の抽出
@@ -223,6 +228,7 @@ class EEWCog(commands.Cog):
                             ):
                                 try:
                                     await channel.send(embed=embed)
+                                    logger.info(f"[EEWCog] チャンネル {channel_id} に地震速報を送信しました。")
                                 except discord.Forbidden:
                                     logger.warning(
                                         f"[EEWCog] チャンネル {channel_id} への送信権限がありません。"
