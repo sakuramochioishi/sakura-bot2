@@ -94,7 +94,6 @@ class SettingsCog(commands.Cog):
 
     # 1. LevelingCog 連携用
     async def get_leveling_config(self, guild_id: int) -> dict:
-        """LevelingCogが必要とする設定項目を取得"""
         settings = await self.get_setting(guild_id)
         if not settings:
             return {
@@ -110,7 +109,6 @@ class SettingsCog(commands.Cog):
 
     # 2. QuizCog 連携用
     async def get_quiz_config(self, guild_id: int) -> dict:
-        """QuizCogが必要とする設定項目を取得"""
         settings = await self.get_setting(guild_id)
         if not settings:
             return {
@@ -126,7 +124,6 @@ class SettingsCog(commands.Cog):
 
     # 3. ModerationCog 連携用
     async def get_moderation_config(self, guild_id: int) -> dict:
-        """ModerationCogが必要とする設定項目を取得"""
         settings = await self.get_setting(guild_id)
         if not settings:
             return {
@@ -409,7 +406,7 @@ class SettingsCog(commands.Cog):
             inline=False,
         )
 
-        await interaction.response.send_message(embed=embed, )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
