@@ -1,6 +1,7 @@
-from collections import defaultdict
+import os
 import random
 import re
+import asyncpg
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -10,7 +11,55 @@ class Dice(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.enabled_guilds = defaultdict(lambda: False)
+        self.pool = None
+
+    async def cog_load(self):
+        """Cogがロードされた時にデータベースプールを作成し、テーブルを初期化する"""
+        database_url = os.getenv("DATABASE_URL3")
+        if not database_url:
+            raise ValueError("環境変数 'DATABASE_URL3' が設定されていません。")
+        
+        # コネクションプールの作成
+        self.pool = await asyncpg.create_pool(database_url)
+        
+        # CREATE TABLE の実行
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS guild_settings (
+                    guild_id BIGINT PRIMARY KEY,
+                    enabled BOOLEAN NOT NULL
+                )
+                """
+            )
+
+    async def cog_unload(self):
+        """Cogがアンロードされる時にプールを閉じる"""
+        if self.pool:
+            await self.pool.close()
+
+    async def get_enabled(self, guild_id: int) -> bool:
+        """サーバーのダイス設定を取得する（デフォルトはFalse）"""
+        async with self.pool.acquire() as connection:
+            row = await connection.fetchrow(
+                "SELECT enabled FROM guild_settings WHERE guild_id = $1", guild_id
+            )
+            if row is None:
+                return False
+            return row["enabled"]
+
+    async def set_enabled(self, guild_id: int, enabled: bool):
+        """サーバーのダイス設定を保存する（UPSERT）"""
+        async with self.pool.acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO guild_settings (guild_id, enabled)
+                VALUES ($1, $2)
+                ON CONFLICT (guild_id) 
+                DO UPDATE SET enabled = EXCLUDED.enabled
+                """,
+                guild_id, enabled
+            )
 
     @app_commands.command(name="roll", description="このサーバーのダイス機能の有効/無効を切り替えます")
     @app_commands.describe(status="有効にするか無効にするかを選択してください")
@@ -23,10 +72,10 @@ class Dice(commands.Cog):
         guild_id = interaction.guild_id
 
         if status == "enable":
-            self.enabled_guilds[guild_id] = True
+            await self.set_enabled(guild_id, True)
             await interaction.response.send_message("✅ このサーバーでダイス機能を**有効**にしました", ephemeral=True)
         else:
-            self.enabled_guilds[guild_id] = False
+            await self.set_enabled(guild_id, False)
             await interaction.response.send_message("❌ このサーバーでダイス機能を**無効**にしました", ephemeral=True)
 
     @roll_setting.error
@@ -41,7 +90,8 @@ class Dice(commands.Cog):
         if message.author.bot or not message.guild:
             return
 
-        if not self.enabled_guilds[message.guild.id]:
+        # データベースから非同期で設定を取得
+        if not await self.get_enabled(message.guild.id):
             return
             
         match = re.search(r"\b(\d+)d(\d+)\b", message.content.lower())
@@ -58,7 +108,6 @@ class Dice(commands.Cog):
         results = [random.randint(1, sides) for _ in range(count)]
         total = sum(results)
 
-        # 画像のようにEmbedのdescriptionを使ってシンプルに表現
         if count > 1:
             results_str = ", ".join(map(str, results))
             if len(results_str) > 1900:
@@ -69,7 +118,7 @@ class Dice(commands.Cog):
 
         embed = discord.Embed(
             description=description, 
-            color=discord.Color.dark_embed() # 落ち着いたダークトーンの枠線に設定
+            color=discord.Color.dark_embed()
         )
 
         await message.reply(embed=embed, mention_author=False)
