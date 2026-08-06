@@ -109,7 +109,7 @@ class Dice(commands.Cog):
         sides = int(match.group(2))
         dice_str = f"{count}d{sides}"
 
-        if count <= 0 or sides <= 0 or count > 100 or sides > 100000:
+        if count <= 0 or sides <= 0 or count > 1000 or sides > 100000:
             return
         
         results = [random.randint(1, sides) for _ in range(count)]
