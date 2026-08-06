@@ -69,7 +69,7 @@ async def get_guild_settings(pool: asyncpg.Pool, guild_id: int) -> dict | None:
         return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM guild_settings WHERE guild_id = $1", guild_id
+            "SELECT * FROM guild_settings WHERE guild_id = $1::bigint", guild_id
         )
         return dict(row) if row else None
 
@@ -190,11 +190,11 @@ class SettingsCog(commands.Cog):
                 INSERT INTO guild_settings (
                     guild_id, log_levelup_channel_id, log_rankup_channel_id, leveling_enabled
                 )
-                VALUES ($1, $2, $3, COALESCE($4, TRUE))
+                VALUES ($1::bigint, $2::bigint, $3::bigint, COALESCE($4::boolean, TRUE))
                 ON CONFLICT (guild_id) DO UPDATE SET
-                    log_levelup_channel_id = COALESCE($2, guild_settings.log_levelup_channel_id),
-                    log_rankup_channel_id = COALESCE($3, guild_settings.log_rankup_channel_id),
-                    leveling_enabled = COALESCE($4, guild_settings.leveling_enabled),
+                    log_levelup_channel_id = COALESCE($2::bigint, guild_settings.log_levelup_channel_id),
+                    log_rankup_channel_id = COALESCE($3::bigint, guild_settings.log_rankup_channel_id),
+                    leveling_enabled = COALESCE($4::boolean, guild_settings.leveling_enabled),
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 interaction.guild_id,
@@ -244,11 +244,11 @@ class SettingsCog(commands.Cog):
                 INSERT INTO guild_settings (
                     guild_id, quiz_answer_time, quiz_time_limit, quiz_channel_id
                 )
-                VALUES ($1, COALESCE($2, 30), COALESCE($3, 60), $4)
+                VALUES ($1::bigint, COALESCE($2::int, 30), COALESCE($3::int, 60), $4::bigint)
                 ON CONFLICT (guild_id) DO UPDATE SET
-                    quiz_answer_time = COALESCE($2, guild_settings.quiz_answer_time),
-                    quiz_time_limit = COALESCE($3, guild_settings.quiz_time_limit),
-                    quiz_channel_id = COALESCE($4, guild_settings.quiz_channel_id),
+                    quiz_answer_time = COALESCE($2::int, guild_settings.quiz_answer_time),
+                    quiz_time_limit = COALESCE($3::int, guild_settings.quiz_time_limit),
+                    quiz_channel_id = COALESCE($4::bigint, guild_settings.quiz_channel_id),
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 interaction.guild_id,
@@ -298,11 +298,11 @@ class SettingsCog(commands.Cog):
                 INSERT INTO guild_settings (
                     guild_id, reishou_channel_id, mod_log_channel_id, auto_mod_enabled
                 )
-                VALUES ($1, $2, $3, COALESCE($4, TRUE))
+                VALUES ($1::bigint, $2::bigint, $3::bigint, COALESCE($4::boolean, TRUE))
                 ON CONFLICT (guild_id) DO UPDATE SET
-                    reishou_channel_id = COALESCE($2, guild_settings.reishou_channel_id),
-                    mod_log_channel_id = COALESCE($3, guild_settings.mod_log_channel_id),
-                    auto_mod_enabled = COALESCE($4, guild_settings.auto_mod_enabled),
+                    reishou_channel_id = COALESCE($2::bigint, guild_settings.reishou_channel_id),
+                    mod_log_channel_id = COALESCE($3::bigint, guild_settings.mod_log_channel_id),
+                    auto_mod_enabled = COALESCE($4::boolean, guild_settings.auto_mod_enabled),
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 interaction.guild_id,
@@ -335,9 +335,9 @@ class SettingsCog(commands.Cog):
             await conn.execute(
                 """
                 INSERT INTO guild_settings (guild_id, eew_channel_id)
-                VALUES ($1, $2)
+                VALUES ($1::bigint, $2::bigint)
                 ON CONFLICT (guild_id) DO UPDATE SET
-                    eew_channel_id = $2,
+                    eew_channel_id = $2::bigint,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 interaction.guild_id,
