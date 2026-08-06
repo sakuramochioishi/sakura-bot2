@@ -15,9 +15,9 @@ class Dice(commands.Cog):
 
     async def cog_load(self):
         """Cogがロードされた時にデータベースプールを作成し、テーブルとカラムを初期化する"""
-        database_url = os.getenv("DATABASE_URL")
+        database_url = os.getenv("DATABASE_URL3")
         if not database_url:
-            raise ValueError("環境変数 'DATABASE_URL' が設定されていません。")
+            raise ValueError("環境変数 'DATABASE_URL3' が設定されていません。")
         
         # ★ statement_cache_size=0 を追加してキャッシュエラーを防ぐ
         self.pool = await asyncpg.create_pool(database_url, statement_cache_size=0)
