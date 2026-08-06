@@ -14,15 +14,15 @@ class Dice(commands.Cog):
         self.pool = None
 
     async def cog_load(self):
-        """Cogがロードされた時にデータベースプールを作成し、テーブルを初期化する"""
-        database_url = os.getenv("DATABASE_URL3")
+        """Cogがロードされた時にデータベースプールを作成し、テーブルとカラムを初期化する"""
+        database_url = os.getenv("DATABASE_URL")
         if not database_url:
-            raise ValueError("環境変数 'DATABASE_URL3' が設定されていません。")
+            raise ValueError("環境変数 'DATABASE_URL' が設定されていません。")
         
         # コネクションプールの作成
         self.pool = await asyncpg.create_pool(database_url)
         
-        # CREATE TABLE の実行
+        # テーブルおよびカラムの確実な初期化
         async with self.pool.acquire() as connection:
             await connection.execute(
                 """
@@ -30,6 +30,13 @@ class Dice(commands.Cog):
                     guild_id BIGINT PRIMARY KEY,
                     enabled BOOLEAN NOT NULL
                 )
+                """
+            )
+            # すでにテーブルが存在していてカラムがない場合の対策
+            await connection.execute(
+                """
+                ALTER TABLE guild_settings 
+                ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT FALSE
                 """
             )
 
