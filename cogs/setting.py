@@ -413,7 +413,8 @@ async def setup(bot: commands.Bot):
     if not hasattr(bot, "db_pool") or bot.db_pool is None:
         if not DATABASE_URL:
             raise ValueError("環境変数 DATABASE_URL が設定されていません。")
-        bot.db_pool = await asyncpg.create_pool(DATABASE_URL)
+        # ★ statement_cache_size=0 を追加してキャッシュエラーを防ぐ
+        bot.db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
 
     async with bot.db_pool.acquire() as conn:
         await conn.execute(CREATE_TABLE_SQL)
