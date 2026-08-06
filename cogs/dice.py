@@ -58,16 +58,21 @@ class Dice(commands.Cog):
         results = [random.randint(1, sides) for _ in range(count)]
         total = sum(results)
 
-        # 画像のようなシンプル表示用のテキストを作成
+        # 画像のようにEmbedのdescriptionを使ってシンプルに表現
         if count > 1:
             results_str = ", ".join(map(str, results))
             if len(results_str) > 1900:
                 results_str = " (出目が多すぎるため省略されました) "
-            content_str = f"{dice_str}\n[{results_str}] > {total}"
+            description = f"**{dice_str}**\n[{results_str}] > {total}"
         else:
-            content_str = f"{dice_str}\n[{results[0]}] > {total}"
+            description = f"**{dice_str}**\n[{results[0]}] > {total}"
 
-        await message.reply(content_str, mention_author=False)
+        embed = discord.Embed(
+            description=description, 
+            color=discord.Color.dark_embed() # 落ち着いたダークトーンの枠線に設定
+        )
+
+        await message.reply(embed=embed, mention_author=False)
 
 
 async def setup(bot):
