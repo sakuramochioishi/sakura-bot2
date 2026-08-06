@@ -19,8 +19,8 @@ class Dice(commands.Cog):
         if not database_url:
             raise ValueError("環境変数 'DATABASE_URL' が設定されていません。")
         
-        # コネクションプールの作成
-        self.pool = await asyncpg.create_pool(database_url)
+        # ★ statement_cache_size=0 を追加してキャッシュエラーを防ぐ
+        self.pool = await asyncpg.create_pool(database_url, statement_cache_size=0)
         
         # テーブルおよびカラムの確実な初期化
         async with self.pool.acquire() as connection:
@@ -109,7 +109,7 @@ class Dice(commands.Cog):
         sides = int(match.group(2))
         dice_str = f"{count}d{sides}"
 
-        if count <= 0 or sides <= 0 or count > 1000 or sides > 100000:
+        if count <= 0 or sides <= 0 or count > 100 or sides > 100000:
             return
         
         results = [random.randint(1, sides) for _ in range(count)]
