@@ -1,8 +1,6 @@
 import ast
-from collections import defaultdict
 import re
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 
@@ -10,42 +8,6 @@ class Calculator(commands.Cog):
 
   def __init__(self, bot):
     self.bot = bot
-    self.enabled_guilds = defaultdict(lambda: False)
-
-  @app_commands.command(
-      name="calculator",
-      description="このサーバーでの電卓機能の有効/無効を切り替えます",
-  )
-  @app_commands.describe(status="有効にするか無効にするかを選択してください")
-  @app_commands.choices(status=[
-      app_commands.Choice(name="有効", value="enable"),
-      app_commands.Choice(name="無効", value="disable"),
-  ])
-  @app_commands.checks.has_permissions(administrator=True)
-  async def calc_setting(self, interaction: discord.Interaction, status: str):
-    guild_id = interaction.guild_id
-    if status == "enable":
-      self.enabled_guilds[guild_id] = True
-      await interaction.response.send_message(
-          "✅ このサーバーでの電卓機能（メッセージ検知）を**有効**にしました。",
-          ephemeral=True,
-      )
-    else:
-      self.enabled_guilds[guild_id] = False
-      await interaction.response.send_message(
-          "❌ このサーバーでの電卓機能（メッセージ検知）を**無効**にしました。",
-          ephemeral=True,
-      )
-
-  @calc_setting.error
-  async def calc_setting_error(
-      self, interaction: discord.Interaction, error: app_commands.AppCommandError
-  ):
-    if isinstance(error, app_commands.CheckFailure):
-      await interaction.response.send_message(
-          "❌ このコマンドを実行するには**サーバー管理者**の権限が必要です。",
-          ephemeral=True,
-      )
 
   def _eval_node(self, node):
     operators = {
@@ -86,17 +48,10 @@ class Calculator(commands.Cog):
     if message.author.bot or not message.guild:
       return
 
-    if not self.enabled_guilds[message.guild.id]:
-      return
-
     content = message.content
-
-    # \b を外し、カッコや演算子を含んだ数式を柔軟にキャッチできるように修正
     calc_match = re.search(r"([0-9\.\s\+\-\*\/\(\)\^%]+)", content)
     if calc_match:
       expr = calc_match.group(1).strip()
-
-      # 誤爆防止：演算子（+ - * / ^ %）またはカッコがしっかり含まれている場合のみ計算する
       has_operator = any(
           op in expr for op in ["+", "-", "*", "/", "^", "%", "(", ")"]
       )
