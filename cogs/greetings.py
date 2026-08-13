@@ -74,25 +74,11 @@ class ModerationCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.ng_words = [
-            "おおw",
-            "うおw",
-            "oow",
-            "uow",
-            "おおｗ",
-            "うおｗ",
-            "うお",
-            "uo",
-            "どわーｗ",
-            "どわーw",
-            "どわ-",
-            "どわ-w",
-            "dowa-w",
-            "dowa-",
-            "dowaーw",
-            "きちーｗ",
-            "きちーw",
-            "kichi-w",
-            "kiti-w",
+            "おおw", "うおw", "oow", "uow",
+            "おおｗ", "うおｗ", "うお", "uo",
+            "どわーｗ", "どわーw", "どわ-", "どわ-w",
+            "dowa-w", "dowa-", "dowaーw",
+            "きちーｗ", "きちーw", "kichi-w", "kiti-w",
         ]
 
     async def reishou_channel_id(self, guild_id: int) -> list[int]:
@@ -108,9 +94,11 @@ class ModerationCog(commands.Cog):
         try:
             if hasattr(settings_cog, "reishou_channel_id"):
                 func = getattr(settings_cog, "reishou_channel_id")
-                if discord.utils.isawaitable(func(guild_id)):
-                    return await func(guild_id)
-                return func(guild_id)
+                result = func(guild_id)
+                # 修正: 正しく awaitable か判定してから待機する
+                if discord.utils.isawaitable(result):
+                    return await result
+                return result
         except Exception as e:
             logger.warning(f"チャンネル設定の取得中にエラーが発生しました: {e}")
 
@@ -129,9 +117,11 @@ class ModerationCog(commands.Cog):
         content = message.content.lower()
 
         for ng_word in self.ng_words:
-            pattern = rf"(?:^|\s){re.escape(ng_word)}(?:$|\s)"
+            target = ng_word.lower()
+            # 全角スペースや半角スペースを考慮したパターン
+            pattern = rf"(^|[\s ]){re.escape(target)}($|[\s ])"
 
-            if re.search(pattern, content) or content == ng_word:
+            if content == target or re.search(pattern, content):
                 try:
                     await message.delete()
                     await message.channel.send(
@@ -144,8 +134,6 @@ class ModerationCog(commands.Cog):
                     )
                 except Exception as e:
                     logger.error(f"冷笑削除処理中にエラーが発生しました: {e}")
-
-
 # ⚙️ コグをBotに登録する
 async def setup(bot: commands.Bot):
     await bot.add_cog(GreetingsCog(bot))
