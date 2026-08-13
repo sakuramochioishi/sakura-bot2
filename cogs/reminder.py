@@ -19,7 +19,7 @@ class Reminder(commands.Cog):
 
     async def init_db(self):
         # 環境変数 DATABASE_URL から接続情報を取得
-        self.db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"))
+        self.db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL3"))
 
     def cog_unload(self):
         self.check_reminders.cancel()
