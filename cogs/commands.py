@@ -86,15 +86,17 @@ class CommandsCog(commands.Cog):
     @commands.command(name="clear")
     @commands.has_permissions(manage_messages=True)
     async def msg_clear(self, ctx, amount: int):
-        if amount < 1 or amount > 100:
-            await ctx.send("❌ 1から100の間の数値を指定してください。", delete_after=5)
+        if amount < 1 or amount > 500:
+            await ctx.send("❌ 1から500の間の数値を指定してください。", delete_after=5)
             return
         deleted = await ctx.channel.purge(limit=amount + 1)
         await ctx.send(f"🧹 正常に {len(deleted) - 1} 件のメッセージを削除しました！", delete_after=5)
 
     @commands.command(name="servers")
-    @commands.is_owner()
     async def list_servers(self, ctx):
+        if not await self.bot.is_owner(ctx.author):
+            return
+
         guild_count = len(self.bot.guilds)
         server_list = ""
         for guild in self.bot.guilds:
@@ -115,8 +117,10 @@ class CommandsCog(commands.Cog):
         await channel.send(message)
 
     @commands.command(name="status")
-    @commands.is_owner()
     async def change_status(self, ctx, *, text: str):
+        if not await self.bot.is_owner(ctx.author):
+            return
+
         await self.bot.change_presence(activity=discord.Game(name=text))
         await ctx.send(f"🤖 Botのステータスを「**{text} をプレイ中**」に変更しました！")
 
@@ -135,12 +139,13 @@ class CommandsCog(commands.Cog):
         await message.edit(content=None, embed=embed)
 
     @commands.command(name="restart")
-    @commands.is_owner()
     async def restart_bot(self, ctx):
+        if not await self.bot.is_owner(ctx.author):
+            return
+
         await ctx.send("**再起動処理を実行中 (プロセスを終了します)**")
         await self.bot.close()
         sys.exit(0)
-
 
 # ⚙️ セットアップ
 async def setup(bot: commands.Bot):
