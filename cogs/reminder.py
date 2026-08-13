@@ -18,13 +18,34 @@ class Reminder(commands.Cog):
         self.check_reminders.start()
 
     async def init_db(self):
-        # 環境変数 DATABASE_URL から接続情報を取得
-        self.db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL3"))
+        self.db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"))
+        async with self.db_pool.acquire() as conn:
+            # テーブル作成
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id SERIAL PRIMARY KEY,
+                    channel_id BIGINT NOT NULL,
+                    mention TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    time TIMESTAMP,
+                    daily_time TIME,
+                    repeat_days INTEGER[],
+                    last_fired DATE
+                );
+            """)
+            # 必要に応じてカラム追加
+            await conn.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS daily_time TIME;")
+            await conn.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS repeat_days INTEGER[];")
+            await conn.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_fired DATE;")
 
     def cog_unload(self):
         self.check_reminders.cancel()
         if self.db_pool:
             self.bot.loop.run_until_complete(self.db_pool.close())
+
+    def get_target_channel_id(self, original_channel_id):
+        # SettingsCogで設定されたIDがあれば優先、なければ登録時のID
+        return getattr(self.bot, "reminder_channel_id", None) or original_channel_id
 
     @tasks.loop(seconds=30)
     async def check_reminders(self):
@@ -38,22 +59,24 @@ class Reminder(commands.Cog):
         today_date = now.date()
 
         async with self.db_pool.acquire() as conn:
-            # 1. 1回限りのリマインダーチェック
+            # 1回限りのチェック
             rows = await conn.fetch("SELECT id, channel_id, mention, message, time FROM reminders WHERE time IS NOT NULL")
             for row in rows:
                 if row["time"].strftime("%Y-%m-%d %H:%M") == current_date_str:
-                    channel = self.bot.get_channel(row["channel_id"])
+                    target_id = self.get_target_channel_id(row["channel_id"])
+                    channel = self.bot.get_channel(target_id)
                     if channel:
                         await channel.send(f"{row['mention']} {row['message']}")
                     await conn.execute("DELETE FROM reminders WHERE id = $1", row["id"])
 
-            # 2. 毎週の繰り返しリマインダーチェック
+            # 毎週のチェック
             rows_weekly = await conn.fetch("SELECT id, channel_id, mention, message, daily_time, repeat_days, last_fired FROM reminders WHERE repeat_days IS NOT NULL")
             for row in rows_weekly:
                 if row["daily_time"] and current_weekday in row["repeat_days"]:
                     if row["daily_time"].strftime("%H:%M") == current_time_str:
                         if row["last_fired"] != today_date:
-                            channel = self.bot.get_channel(row["channel_id"])
+                            target_id = self.get_target_channel_id(row["channel_id"])
+                            channel = self.bot.get_channel(target_id)
                             if channel:
                                 await channel.send(f"{row['mention']} {row['message']}")
                             await conn.execute("UPDATE reminders SET last_fired = $1 WHERE id = $2", today_date, row["id"])
@@ -63,16 +86,11 @@ class Reminder(commands.Cog):
         await self.bot.wait_until_ready()
 
     @app_commands.command(name="remind", description="日時を指定して1回限りのリマインダーを設定します")
-    @app_commands.describe(
-        datetime_str="日時 (例: 2026-12-31 23:59)",
-        mention="メンション先 (@ロール または @ユーザー)",
-        message="リマインドするメッセージ"
-    )
     async def set_reminder(self, interaction: discord.Interaction, datetime_str: str, mention: str, message: str):
         try:
             dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
         except ValueError:
-            await interaction.response.send_message("❌ 日付と時刻の形式は `YYYY-MM-DD HH:MM` で指定してください。", ephemeral=True)
+            await interaction.response.send_message("❌ 日付と時刻は `YYYY-MM-DD HH:MM` 形式で指定してください。", ephemeral=True)
             return
 
         async with self.db_pool.acquire() as conn:
@@ -80,79 +98,56 @@ class Reminder(commands.Cog):
                 "INSERT INTO reminders (channel_id, mention, message, time) VALUES ($1, $2, $3, $4)",
                 interaction.channel_id, mention, message, dt
             )
-
-        await interaction.response.send_message(f"✅ リマインダーを設定しました！\n日時: `{datetime_str}`\n対象: {mention}\n内容: {message}")
+        await interaction.response.send_message(f"✅ リマインダーを設定しました！\n日時: `{datetime_str}`\n対象: {mention}")
 
     @app_commands.command(name="remind_weekly", description="曜日を指定して毎週のリマインダーを設定します")
-    @app_commands.describe(
-        time_str="時刻 (例: 20:00)",
-        days="曜日 (例: mon,wed,fri または 月,水,金)",
-        mention="メンション先",
-        message="リマインドするメッセージ"
-    )
     async def set_weekly_reminder(self, interaction: discord.Interaction, time_str: str, days: str, mention: str, message: str):
         try:
             t = datetime.strptime(time_str, "%H:%M").time()
         except ValueError:
-            await interaction.response.send_message("❌ 時刻の形式は `HH:MM` で指定してください。", ephemeral=True)
+            await interaction.response.send_message("❌ 時刻は `HH:MM` 形式で指定してください。", ephemeral=True)
             return
 
-        day_list = []
-        for d in days.split(","):
-            d_clean = d.strip().lower()
-            if d_clean in DAY_MAP:
-                day_list.append(DAY_MAP[d_clean])
-            else:
-                await interaction.response.send_message(f"❌ 無効な曜日が含まれています: `{d_clean}`", ephemeral=True)
-                return
-
+        day_list = [DAY_MAP[d.strip().lower()] for d in days.split(",") if d.strip().lower() in DAY_MAP]
+        
         async with self.db_pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO reminders (channel_id, mention, message, daily_time, repeat_days) VALUES ($1, $2, $3, $4, $5)",
                 interaction.channel_id, mention, message, t, day_list
             )
-
-        await interaction.response.send_message(f"🔄 毎週のリマインダーを設定しました！\n時刻: `{time_str}`\n対象: {mention}\n内容: {message}")
+        await interaction.response.send_message(f"🔄 毎週のリマインダーを設定しました！\n時刻: `{time_str}`\n対象: {mention}")
 
     @app_commands.command(name="remind_list", description="登録されているリマインダーの一覧を表示します")
     async def list_reminders(self, interaction: discord.Interaction):
         async with self.db_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT id, channel_id, mention, message, time, daily_time, repeat_days FROM reminders")
+            rows = await conn.fetch("SELECT * FROM reminders ORDER BY time ASC, daily_time ASC")
 
         if not rows:
             await interaction.response.send_message("📭 登録されているリマインダーはありません。", ephemeral=True)
             return
 
-        embed = discord.Embed(title="⏰ 登録済みリマインダー一覧", color=discord.Color.blue())
+        embed = discord.Embed(title="⏰ 登録済みリマインダー一覧", color=discord.Color.green())
         days_rev_map = {v: k for k, v in DAY_MAP.items()}
 
         for row in rows:
-            channel = self.bot.get_channel(row["channel_id"])
-            channel_name = channel.name if channel else "不明なチャンネル"
-
             if row["time"]:
-                info = f"日時: `{row['time'].strftime('%Y-%m-%d %H:%M')}` (1回限り)"
+                info = f"📅 日時: `{row['time'].strftime('%Y-%m-%d %H:%M')}`"
             else:
                 day_names = [days_rev_map[d] for d in row["repeat_days"] if d in days_rev_map]
-                info = f"時刻: `{row['daily_time'].strftime('%H:%M')}` / 曜日: `{', '.join(day_names)}` (毎週)"
-
-            embed.add_field(
-                name=f"ID: {row['id']} | チャンネル: #{channel_name}",
-                value=f"{info}\n対象: {row['mention']}\n内容: {row['message']}",
-                inline=False
-            )
+                info = f"🔄 時刻: `{row['daily_time'].strftime('%H:%M')}` / 曜日: `{', '.join(day_names)}`"
+            
+            embed.add_field(name=f"ID: {row['id']} | {row['message']}", value=f"{info}\n👤 対象: {row['mention']}", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="remind_del", description="指定したIDのリマインダーを削除します")
-    @app_commands.describe(reminder_id="削除するリマインダーのID")
     async def delete_reminder(self, interaction: discord.Interaction, reminder_id: int):
         async with self.db_pool.acquire() as conn:
             result = await conn.execute("DELETE FROM reminders WHERE id = $1", reminder_id)
-
+        
         if result == "DELETE 1":
-            await interaction.response.send_message(f"🗑️ ID `{reminder_id}` のリマインダーを削除しました。", ephemeral=True)
+            await interaction.response.send_message(f"🗑️ ID `{reminder_id}` を削除しました。", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ 指定されたIDのリマインダーが見つかりません。", ephemeral=True)
+            await interaction.response.send_message("❌ IDが見つかりませんでした。", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Reminder(bot))
