@@ -24,14 +24,25 @@ class Calculator(commands.Cog):
 
     if isinstance(node, ast.Constant):
       if isinstance(node.value, (int, float)):
+        # 扱える数値の大きさに制限をかける（例: 絶対値が 1e15 を超えるものは拒否）
+        if abs(node.value) > 1e15:
+          raise ValueError("数値が大きすぎます")
         return node.value
       raise TypeError("サポートされていない型です")
+
     elif isinstance(node, ast.BinOp):
       op_type = type(node.op)
       if op_type in operators:
-        return operators[op_type](
-            self._eval_node(node.left), self._eval_node(node.right)
-        )
+        left_val = self._eval_node(node.left)
+        right_val = self._eval_node(node.right)
+
+        # 累乗（^）の指数が大きすぎる場合にフリーズを防ぐため制限
+        if op_type is ast.Pow:
+          if isinstance(right_val, (int, float)) and right_val > 100:
+            raise ValueError("指数が大きすぎます（最大100まで）")
+
+        return operators[op_type](left_val, right_val)
+
     elif isinstance(node, ast.UnaryOp):
       op_type = type(node.op)
       if op_type in operators:
@@ -52,6 +63,11 @@ class Calculator(commands.Cog):
     calc_match = re.search(r"([0-9\.\s\+\-\*\/\(\)\^%]+)", content)
     if calc_match:
       expr = calc_match.group(1).strip()
+      
+      # 【制限1】長すぎる数式（40文字超）は処理しない
+      if len(expr) > 40:
+        return
+
       has_operator = any(
           op in expr for op in ["+", "-", "*", "/", "^", "%", "(", ")"]
       )
@@ -75,6 +91,7 @@ class Calculator(commands.Cog):
           )
           await message.reply(embed=embed, mention_author=False)
         except Exception:
+          # 負荷の高い計算やエラー時は静かに無視する
           pass
 
 
