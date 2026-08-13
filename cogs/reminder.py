@@ -4,6 +4,7 @@ from discord.ext import commands, tasks
 from datetime import datetime, date
 import os
 import asyncpg
+import asyncio
 
 DAY_MAP = {
     "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
@@ -43,7 +44,10 @@ class Reminder(commands.Cog):
     def cog_unload(self):
         self.check_reminders.cancel()
         if self.db_pool:
-            self.bot.loop.run_until_complete(self.db_pool.close())
+            try:
+                self.bot.loop.create_task(self.db_pool.close())
+            except Exception:
+                pass
 
     async def get_target_channel_id(self, guild_id, original_channel_id):
         # SettingsCogで設定されたIDがあれば優先、なければ登録時のID
@@ -55,7 +59,7 @@ class Reminder(commands.Cog):
                     return guild_reminder_ch
         return original_channel_id
 
-    @tasks.loop(seconds=30)
+    @tasks.loop(seconds=15)
     async def check_reminders(self):
         if not self.db_pool:
             return
