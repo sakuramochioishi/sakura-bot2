@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     -- EEWCog 連携用
     eew_channel_id BIGINT,
     
+    -- ReminderCog 連携用
+    reminder_channel_id BIGINT,
+    
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -57,6 +60,7 @@ ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS mod_log_channel_id BIGINT;
 ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS auto_mod_enabled BOOLEAN DEFAULT TRUE;
 
 ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS eew_channel_id BIGINT;
+ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS reminder_channel_id BIGINT;
 ALTER TABLE guild_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
 """
 
@@ -75,7 +79,7 @@ async def get_guild_settings(pool: asyncpg.Pool, guild_id: int) -> dict | None:
 
 
 class SettingsCog(commands.Cog):
-    """設定管理用 Cog (LevelingCog, QuizCog, ModerationCog, EEWCog 連携)"""
+    """設定管理用 Cog (LevelingCog, QuizCog, ModerationCog, EEWCog, ReminderCog 連携)"""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -151,6 +155,14 @@ class SettingsCog(commands.Cog):
         except Exception as e:
             logger.error(f"[SettingsCog] EEW送信先の取得失敗: {e}")
             return []
+
+    # 5. ReminderCog 連携用
+    async def get_reminder_channel_id(self, guild_id: int) -> int | None:
+        """指定ギルドのリマインダー送信先チャンネルIDを取得"""
+        settings = await self.get_setting(guild_id)
+        if not settings:
+            return None
+        return settings.get("reminder_channel_id")
 
     # ==================================================
     # 🎛️ Slash Commands (/setting ...)
@@ -350,6 +362,34 @@ class SettingsCog(commands.Cog):
         )
 
     # --------------------------------------------------
+    # /setting reminder (ReminderCog 用)
+    # --------------------------------------------------
+    @setting_group.command(
+        name="reminder", description="リマインダーの通知先チャンネルを設定します"
+    )
+    @app_commands.describe(channel="リマインドを送信するチャンネル")
+    async def setting_reminder(
+        self, interaction: discord.Interaction, channel: discord.TextChannel
+    ):
+        async with self.db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO guild_settings (guild_id, reminder_channel_id)
+                VALUES ($1::bigint, $2::bigint)
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    reminder_channel_id = $2::bigint,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                interaction.guild_id,
+                channel.id,
+            )
+
+        await interaction.response.send_message(
+            f"✅ リマインダーの通知先チャンネルを {channel.mention} に設定しました。",
+            ephemeral=True,
+        )
+
+    # --------------------------------------------------
     # /setting status (確認コマンド)
     # --------------------------------------------------
     @setting_group.command(
@@ -406,6 +446,13 @@ class SettingsCog(commands.Cog):
             inline=False,
         )
 
+        # Reminder 設定
+        embed.add_field(
+            name="⏰ リマインダー",
+            value=f"送信先Ch: {ch_fmt(settings.get('reminder_channel_id'))}",
+            inline=False,
+        )
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -413,7 +460,6 @@ async def setup(bot: commands.Bot):
     if not hasattr(bot, "db_pool") or bot.db_pool is None:
         if not DATABASE_URL:
             raise ValueError("環境変数 DATABASE_URL が設定されていません。")
-        # ★ statement_cache_size=0 を追加してキャッシュエラーを防ぐ
         bot.db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
 
     async with bot.db_pool.acquire() as conn:
