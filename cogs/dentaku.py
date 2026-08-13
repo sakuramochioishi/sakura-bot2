@@ -10,7 +10,6 @@ class Calculator(commands.Cog):
 
   def __init__(self, bot):
     self.bot = bot
-    # デフォルトは無効 (False)
     self.enabled_guilds = defaultdict(lambda: False)
 
   @app_commands.command(
@@ -91,10 +90,17 @@ class Calculator(commands.Cog):
       return
 
     content = message.content
-    calc_match = re.search(r"\b([0-9\.\s\+\-\*\/\(\)\^%]+)\b", content)
+
+    # \b を外し、カッコや演算子を含んだ数式を柔軟にキャッチできるように修正
+    calc_match = re.search(r"([0-9\.\s\+\-\*\/\(\)\^%]+)", content)
     if calc_match:
       expr = calc_match.group(1).strip()
-      if any(op in expr for op in ["+", "-", "*", "/", "^", "%"]):
+
+      # 誤爆防止：演算子（+ - * / ^ %）またはカッコがしっかり含まれている場合のみ計算する
+      has_operator = any(
+          op in expr for op in ["+", "-", "*", "/", "^", "%", "(", ")"]
+      )
+      if has_operator:
         try:
           clean_expr = expr.replace("^", "**")
           result = self.safe_eval(clean_expr)
