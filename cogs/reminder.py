@@ -18,7 +18,7 @@ class Reminder(commands.Cog):
         self.check_reminders.start()
 
     async def init_db(self):
-        self.db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"))
+        self.db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL3"))
         async with self.db_pool.acquire() as conn:
             # テーブル作成
             await conn.execute("""
@@ -85,7 +85,7 @@ class Reminder(commands.Cog):
     async def before_check_reminders(self):
         await self.bot.wait_until_ready()
 
-    @app_commands.command(name="remind", description="日時を指定して1回限りのリマインダーを設定します")
+    @app_commands.command(name="remind", description="日時を指定して1回限りのリマインダーを設定します" )
     async def set_reminder(self, interaction: discord.Interaction, datetime_str: str, mention: str, message: str):
         try:
             dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
@@ -98,7 +98,8 @@ class Reminder(commands.Cog):
                 "INSERT INTO reminders (channel_id, mention, message, time) VALUES ($1, $2, $3, $4)",
                 interaction.channel_id, mention, message, dt
             )
-        await interaction.response.send_message(f"✅ リマインダーを設定しました！\n日時: `{datetime_str}`\n対象: {mention}")
+        # 隠しメッセージ（ephemeral=True）に変更
+        await interaction.response.send_message(f"✅ リマインダーを設定しました！\n日時: `{datetime_str}`\n対象: {mention}", ephemeral=True)
 
     @app_commands.command(name="remind_weekly", description="曜日を指定して毎週のリマインダーを設定します")
     async def set_weekly_reminder(self, interaction: discord.Interaction, time_str: str, days: str, mention: str, message: str):
@@ -115,7 +116,8 @@ class Reminder(commands.Cog):
                 "INSERT INTO reminders (channel_id, mention, message, daily_time, repeat_days) VALUES ($1, $2, $3, $4, $5)",
                 interaction.channel_id, mention, message, t, day_list
             )
-        await interaction.response.send_message(f"🔄 毎週のリマインダーを設定しました！\n時刻: `{time_str}`\n対象: {mention}")
+        # 隠しメッセージ（ephemeral=True）に変更
+        await interaction.response.send_message(f"🔄 毎週のリマインダーを設定しました！\n時刻: `{time_str}`\n対象: {mention}", ephemeral=True)
 
     @app_commands.command(name="remind_list", description="登録されているリマインダーの一覧を表示します")
     async def list_reminders(self, interaction: discord.Interaction):
