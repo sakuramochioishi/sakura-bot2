@@ -24,6 +24,7 @@ class Reminder(commands.Cog):
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS reminders (
                     id SERIAL PRIMARY KEY,
+                    guild_id BIGINT,
                     channel_id BIGINT NOT NULL,
                     mention TEXT NOT NULL,
                     message TEXT NOT NULL,
@@ -34,6 +35,7 @@ class Reminder(commands.Cog):
                 );
             """)
             # 必要に応じてカラム追加
+            await conn.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS guild_id BIGINT;")
             await conn.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS daily_time TIME;")
             await conn.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS repeat_days INTEGER[];")
             await conn.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_fired DATE;")
@@ -43,9 +45,15 @@ class Reminder(commands.Cog):
         if self.db_pool:
             self.bot.loop.run_until_complete(self.db_pool.close())
 
-    def get_target_channel_id(self, original_channel_id):
+    async def get_target_channel_id(self, guild_id, original_channel_id):
         # SettingsCogで設定されたIDがあれば優先、なければ登録時のID
-        return getattr(self.bot, "reminder_channel_id", None) or original_channel_id
+        if guild_id:
+            settings_cog = self.bot.get_cog("SettingsCog")
+            if settings_cog and hasattr(settings_cog, "get_reminder_channel_id"):
+                guild_reminder_ch = await settings_cog.get_reminder_channel_id(guild_id)
+                if guild_reminder_ch:
+                    return guild_reminder_ch
+        return original_channel_id
 
     @tasks.loop(seconds=30)
     async def check_reminders(self):
@@ -60,22 +68,22 @@ class Reminder(commands.Cog):
 
         async with self.db_pool.acquire() as conn:
             # 1回限りのチェック
-            rows = await conn.fetch("SELECT id, channel_id, mention, message, time FROM reminders WHERE time IS NOT NULL")
+            rows = await conn.fetch("SELECT id, guild_id, channel_id, mention, message, time FROM reminders WHERE time IS NOT NULL")
             for row in rows:
                 if row["time"].strftime("%Y-%m-%d %H:%M") == current_date_str:
-                    target_id = self.get_target_channel_id(row["channel_id"])
+                    target_id = await self.get_target_channel_id(row["guild_id"], row["channel_id"])
                     channel = self.bot.get_channel(target_id)
                     if channel:
                         await channel.send(f"{row['mention']} {row['message']}")
                     await conn.execute("DELETE FROM reminders WHERE id = $1", row["id"])
 
             # 毎週のチェック
-            rows_weekly = await conn.fetch("SELECT id, channel_id, mention, message, daily_time, repeat_days, last_fired FROM reminders WHERE repeat_days IS NOT NULL")
+            rows_weekly = await conn.fetch("SELECT id, guild_id, channel_id, mention, message, daily_time, repeat_days, last_fired FROM reminders WHERE repeat_days IS NOT NULL")
             for row in rows_weekly:
                 if row["daily_time"] and current_weekday in row["repeat_days"]:
                     if row["daily_time"].strftime("%H:%M") == current_time_str:
                         if row["last_fired"] != today_date:
-                            target_id = self.get_target_channel_id(row["channel_id"])
+                            target_id = await self.get_target_channel_id(row["guild_id"], row["channel_id"])
                             channel = self.bot.get_channel(target_id)
                             if channel:
                                 await channel.send(f"{row['mention']} {row['message']}")
@@ -95,10 +103,9 @@ class Reminder(commands.Cog):
 
         async with self.db_pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO reminders (channel_id, mention, message, time) VALUES ($1, $2, $3, $4)",
-                interaction.channel_id, mention, message, dt
+                "INSERT INTO reminders (guild_id, channel_id, mention, message, time) VALUES ($1, $2, $3, $4, $5)",
+                interaction.guild_id, interaction.channel_id, mention, message, dt
             )
-        # 隠しメッセージ（ephemeral=True）に変更
         await interaction.response.send_message(f"✅ リマインダーを設定しました！\n日時: `{datetime_str}`\n対象: {mention}", ephemeral=True)
 
     @app_commands.command(name="remind_weekly", description="曜日を指定して毎週のリマインダーを設定します")
@@ -113,16 +120,15 @@ class Reminder(commands.Cog):
         
         async with self.db_pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO reminders (channel_id, mention, message, daily_time, repeat_days) VALUES ($1, $2, $3, $4, $5)",
-                interaction.channel_id, mention, message, t, day_list
+                "INSERT INTO reminders (guild_id, channel_id, mention, message, daily_time, repeat_days) VALUES ($1, $2, $3, $4, $5, $6)",
+                interaction.guild_id, interaction.channel_id, mention, message, t, day_list
             )
-        # 隠しメッセージ（ephemeral=True）に変更
         await interaction.response.send_message(f"🔄 毎週のリマインダーを設定しました！\n時刻: `{time_str}`\n対象: {mention}", ephemeral=True)
 
     @app_commands.command(name="remind_list", description="登録されているリマインダーの一覧を表示します")
     async def list_reminders(self, interaction: discord.Interaction):
         async with self.db_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM reminders ORDER BY time ASC, daily_time ASC")
+            rows = await conn.fetch("SELECT * FROM reminders WHERE guild_id = $1 ORDER BY time ASC, daily_time ASC", interaction.guild_id)
 
         if not rows:
             await interaction.response.send_message("📭 登録されているリマインダーはありません。", ephemeral=True)
@@ -144,12 +150,12 @@ class Reminder(commands.Cog):
     @app_commands.command(name="remind_del", description="指定したIDのリマインダーを削除します")
     async def delete_reminder(self, interaction: discord.Interaction, reminder_id: int):
         async with self.db_pool.acquire() as conn:
-            result = await conn.execute("DELETE FROM reminders WHERE id = $1", reminder_id)
+            result = await conn.execute("DELETE FROM reminders WHERE id = $1 AND guild_id = $2", reminder_id, interaction.guild_id)
         
         if result == "DELETE 1":
             await interaction.response.send_message(f"🗑️ ID `{reminder_id}` を削除しました。", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ IDが見つかりませんでした。", ephemeral=True)
+            await interaction.response.send_message("❌ 指定したIDのリマインダーが見つからないか、権限がありません。", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Reminder(bot))
