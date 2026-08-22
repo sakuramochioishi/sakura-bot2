@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # ==========================================
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL3")
 
 # ==========================================
 # 2. テーブル作成 & カラム自動追加 用 SQL
